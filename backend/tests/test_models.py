@@ -1,7 +1,16 @@
 import pytest
 from pydantic import ValidationError
 
-from app.models import AskRequest, AskResponse, ChunkSource, DocumentInfo, HealthResponse, UploadResponse
+from app.models import (
+    AskRequest,
+    AskResponse,
+    ChunkSource,
+    DocumentInfo,
+    DocumentMetadata,
+    HealthResponse,
+    IngestionReport,
+    UploadResponse,
+)
 
 
 class TestAskRequest:
@@ -31,9 +40,22 @@ class TestAskRequest:
 class TestUploadResponse:
     def test_default_status(self):
         r = UploadResponse(
-            doc_id="id", filename="f.pdf", chunk_count=5, page_count=2, ingestion_time_ms=100
+            doc_id="id",
+            filename="f.pdf",
+            chunk_count=5,
+            page_count=2,
+            ingestion_time_ms=100,
+            ingestion_report=IngestionReport(
+                original_chunks=5,
+                exact_dedup_removed=0,
+                semantic_dedup_removed=0,
+                final_chunks=5,
+                dedup_rate=0.0,
+            ),
+            document_metadata=DocumentMetadata(),
         )
         assert r.status == "success"
+        assert r.ingestion_report.final_chunks == 5
 
 
 class TestChunkSource:

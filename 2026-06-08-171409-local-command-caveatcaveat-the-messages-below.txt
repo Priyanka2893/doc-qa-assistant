@@ -1,0 +1,895 @@
+╭─── Claude Code v2.1.167 ─────────────────────────────────────────────────────╮
+│                                                    │ Tips for getting        │
+│          Welcome back Priyanka Shaktawat!          │ started                 │
+│                                                    │ Run /init to create a … │
+│                       ▐▛███▜▌                      │ ─────────────────────── │
+│                      ▝▜█████▛▘                     │ What's new              │
+│                        ▘▘ ▝▝                       │ Bug fixes and reliabil… │
+│      Sonnet 4.6 · Claude Pro ·                     │ Bug fixes and reliabil… │
+│      priyankastudy193@gmail.com's Organization     │ Added `fallbackModel` … │
+│         ~/projects/doc-qa-assistant/backend        │ /release-notes for more │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+❯ /clear                                                                        
+
+❯ /context 
+  ⎿  Context Usage
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛀ ⛁ ⛀   Sonnet 4.6
+     ⛀ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶   claude-sonnet-4-6
+     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶   18.2k/200k tokens (9%)
+     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ 
+     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶   Estimated usage by category
+     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶   ⛁ System prompt: 6.4k tokens (3.2%)
+     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶   ⛁ System tools: 9.1k tokens (4.6%)
+     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶   ⛁ Memory files: 1.5k tokens (0.8%)
+     ⛶ ⛶ ⛶ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝   ⛁ Skills: 1.1k tokens (0.5%)
+     ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝   ⛁ Messages: 110 tokens (0.1%)
+                           ⛶ Free space: 148.8k (74.4%)
+                           ⛝ Autocompact buffer: 33k tokens (16.5%)
+
+     Auto-compact window: 200k tokens
+
+     MCP tools · /mcp (loaded on-demand)
+     └ 4 tools · 0 tokens
+
+     Memory files · /memory
+     └ 1 file · 1.5k tokens
+
+     Skills · /skills
+     └ 13 skills · 1.1k tokens
+
+     /context all to expand
+
+❯ uv add rank_bm25                                                              
+
+⏺ Adding rank_bm25 to the backend project.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ rank-bm25==0.2.2 installed and added to pyproject.toml.
+
+✻ Worked for 9s
+
+❯ uv add sentence-transformers                                                  
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ sentence-transformers is already installed in the project — no changes needed.
+
+✻ Cogitated for 5s
+
+※ recap: Building a RAG document Q&A assistant. Both rank-bm25 and sentence-transformers are installed. Next step is implementing hybrid search in vector_store.py.
+
+❯ Upgrade the RAG retrieval system with hybrid search and reranking. Read       
+  CLAUDE.md for context.                                                        
+                                                                                
+  ## Architecture Change                                                        
+                                                                                
+  Current flow:                                                                 
+    query → embed → vector_search → top_k chunks → LLM                          
+                                                                                
+  New flow:                                                                     
+    query → [embed + bm25_tokenize] → [vector_search + bm25_search] → RRF merge 
+  → rerank → top_k chunks → LLM                                                 
+                                                                                
+  ## New File: services/bm25_store.py                                           
+                                                                                
+  Implement an in-memory BM25 index per document:                               
+  - Use rank_bm25.BM25Okapi                                                     
+  - Class BM25Store:                                                            
+    - __init__: self._indexes: dict[str, BM25Okapi] = {}  # doc_id -> index     
+    - self._corpus: dict[str, list[str]] = {}  # doc_id -> list of chunk texts  
+    - self._chunk_ids: dict[str, list[str]] = {}  # doc_id -> list of point IDs 
+                                                                                
+    - build_index(doc_id: str, chunks: list[str], chunk_ids: list[str]):        
+      Tokenize chunks (simple whitespace + lowercase), build BM25Okapi index.   
+      Store in self._indexes[doc_id].                                           
+                                                                                
+    - search(doc_id: str, query: str, top_k: int) -> list[tuple[str, float]]:   
+      Tokenize query, get BM25 scores for all chunks, return top_k as           
+  [(chunk_id, score)].                                                          
+      Normalize scores to 0-1 range.                                            
+                                                                                
+    - remove_document(doc_id: str):                                             
+      Delete from self._indexes, _corpus, _chunk_ids.                           
+                                                                                
+    - has_document(doc_id: str) -> bool                                         
+                                                                                
+  - Make BM25Store a singleton (like embedder)                                  
+  - On app startup, rebuild BM25 indexes from existing Qdrant data (scroll all  
+  points, group by doc_id)                                                      
+                                                                                
+  ## Update services/vector_store.py                                            
+                                                                                
+  Add function:                                                                 
+  - scroll_document_chunks(client, collection_name, doc_id) -> list[dict]:      
+    Return all chunks for a doc_id as [{id, text, chunk_index, ...}]            
+    Use Qdrant scroll API with doc_id filter                                    
+                                                                                
+  ## New File: services/retriever.py                                            
+                                                                                
+  This is the main retrieval orchestrator:                                      
+                                                                                
+  ```python                                                                     
+  class SearchMode(str, Enum):                                                  
+      VECTOR = "vector"                                                         
+      HYBRID = "hybrid"                                                         
+      KEYWORD = "keyword"                                                       
+                                                                                
+  class RetrievalResult(BaseModel):                                             
+      chunk_id: str                                                             
+      text: str                                                                 
+      score: float         # Final merged score                                 
+      vector_score: float | None                                                
+      bm25_score: float | None                                                  
+      doc_id: str                                                               
+      filename: str                                                             
+      chunk_index: int                                                          
+      page_number: int | None                                                   
+                                                                                
+  async def retrieve(                                                           
+      question: str,                                                            
+      doc_id: str,                                                              
+      top_k: int = 5,                                                           
+      mode: SearchMode = SearchMode.HYBRID,                                     
+      rerank: bool = True,                                                      
+  ) -> list[RetrievalResult]:                                                   
+  ``` {data-source-line="125"}                                                  
+                                                                                
+  Implementation:                                                               
+  1. If mode == VECTOR: just do vector search, return top_k                     
+  2. If mode == KEYWORD: just do BM25 search, return top_k                      
+  3. If mode == HYBRID:                                                         
+     a. Vector search: top_k * 2 candidates                                     
+     b. BM25 search: top_k * 2 candidates                                       
+     c. RRF merge (see below)                                                   
+     d. Take top_k * 2 from merged                                              
+  4. If rerank=True: apply cross-encoder reranking on candidates, take top_k    
+  5. Return final RetrievalResult list                                          
+                                                                                
+  ### Reciprocal Rank Fusion (RRF):                                             
+  ```python                                                                     
+  def reciprocal_rank_fusion(                                                   
+      vector_results: list[tuple[str, float]],  # (chunk_id, score)             
+      bm25_results: list[tuple[str, float]],                                    
+      k: int = 60  # RRF constant, typically 60                                 
+  ) -> list[tuple[str, float]]:                                                 
+      scores = {}                                                               
+      for rank, (chunk_id, _) in enumerate(vector_results):                     
+          scores[chunk_id] = scores.get(chunk_id, 0) + 1 / (k + rank + 1)       
+      for rank, (chunk_id, _) in enumerate(bm25_results):                       
+          scores[chunk_id] = scores.get(chunk_id, 0) + 1 / (k + rank + 1)       
+      return sorted(scores.items(), key=lambda x: x[1], reverse=True)           
+  ``` {data-source-line="151"}                                                  
+                                                                                
+  ### Cross-Encoder Reranking:                                                  
+  - Use sentence_transformers.CrossEncoder with model                           
+  "cross-encoder/ms-marco-MiniLM-L-6-v2"                                        
+  - Load as singleton (same pattern as embedder)                                
+  - rerank(question: str, candidates: list[RetrievalResult]) ->                 
+  list[RetrievalResult]:                                                        
+    - Pair (question, chunk_text) for each candidate                            
+    - CrossEncoder.predict(pairs) → scores                                      
+    - Sort candidates by cross-encoder score descending                         
+    - Update result.score with cross-encoder score                              
+  - NOTE: cross-encoder model is ~80MB, downloads on first use. It's            
+  CPU-friendly.                                                                 
+                                                                                
+  ## Update routers/qa.py                                                       
+                                                                                
+  1. Update AskRequest to add:                                                  
+     - search_mode: SearchMode = SearchMode.HYBRID                              
+     - rerank: bool = True                                                      
+                                                                                
+  2. Replace direct vector_store.search_chunks call with retriever.retrieve()   
+                                                                                
+  3. Update GlobalAsk to also use hybrid retrieval                              
+                                                                                
+  ## Update models.py                                                           
+  - Add SearchMode enum                                                         
+  - Add rerank: bool = True, search_mode: SearchMode = SearchMode.HYBRID to     
+  AskRequest                                                                    
+  - Add vector_score: float | None, bm25_score: float | None to ChunkSource     
+                                                                                
+  ## Update main.py lifespan                                                    
+  - On startup: after Qdrant init, rebuild BM25 indexes from existing data      
+  - Pass bm25_store to retriever                                                
+                                                                                
+  ## Update routers/documents.py                                                
+  - After upserting to Qdrant, call bm25_store.build_index(doc_id, chunks,      
+  chunk_ids)                                                                    
+  - On delete: call bm25_store.remove_document(doc_id)                          
+                                                                                
+  ## Important Notes                                                            
+  - CrossEncoder is synchronous — wrap in run_in_executor like the embedder     
+  - BM25 index lives in memory — it's rebuilt on startup from Qdrant            
+  - Log which search mode was used and how many candidates at each stage        
+  - Default to HYBRID mode for best results                                     
+
+⏺ Let me read the current codebase before implementing.
+
+  Read 6 files (ctrl+o to expand)
+
+⏺ Now I have a complete picture. Let me implement all the changes.
+
+⏺ Write(app/services/bm25_store.py)
+  ⎿  Wrote 141 lines to app/services/bm25_store.py
+       1 from collections import defaultdict
+       2 from functools import lru_cache
+       3 
+       4 import structlog
+       5 from rank_bm25 import BM25Okapi
+       6 
+       7 logger = structlog.get_logger(__name__)
+       8 
+       9 
+      10 class BM25Store:
+     … +143 lines (ctrl+o to expand)
+
+⏺ Write(app/services/retriever.py)
+  ⎿  Wrote 220 lines to app/services/retriever.py
+       1 import asyncio
+       2 import time
+       3 from functools import lru_cache
+       4 
+       5 import structlog
+       6 from pydantic import BaseModel
+       7 from sentence_transformers import CrossEncoder
+       8 
+       9 from app.models import SearchMode
+      10 from app.services.bm25_store import get_bm25_store
+     … +233 lines (ctrl+o to expand)
+
+⏺ Now update models.py to add SearchMode and the new fields:
+
+⏺ Write(app/models.py)
+  ⎿  Added 14 lines
+       1 +from enum import Enum                                          
+       2 +                                                               
+       3  from pydantic import BaseModel, Field
+       4  
+       5  
+       6 +class SearchMode(str, Enum):                                   
+       7 +    VECTOR = "vector"                                          
+       8 +    HYBRID = "hybrid"                                          
+       9 +    KEYWORD = "keyword"                                        
+      10 +                                                               
+      11 +                                                               
+      12  class ChunkSource(BaseModel):
+      13      chunk_index: int
+      14      text_excerpt: str
+      15      score: float
+      16      page_number: int | None
+      17 +    vector_score: float | None = None                          
+      18 +    bm25_score: float | None = None                            
+      19  
+      20  
+      21  class GlobalChunkSource(ChunkSource):
+     ...
+      36      question: str = Field(min_length=3, max_length=1000)
+      37      document_id: str
+      38      top_k: int = Field(default=5, ge=1, le=20)
+      39 +    search_mode: SearchMode = SearchMode.HYBRID                
+      40 +    rerank: bool = True                                        
+      41  
+      42  
+      43  class AskResponse(BaseModel):
+     ...
+      51  class GlobalAskRequest(BaseModel):
+      52      question: str = Field(min_length=3, max_length=1000)
+      53      top_k: int = Field(default=10, ge=1, le=50)
+      54 +    search_mode: SearchMode = SearchMode.HYBRID                
+      55 +    rerank: bool = True                                        
+      56  
+      57  
+      58  class GlobalAskResponse(BaseModel):
+
+⏺ Now update vector_store.py — make upsert_chunks return chunk IDs, and add
+  scroll_document_chunks:
+
+⏺ Update(app/services/vector_store.py)
+  ⎿  Added 3 lines, removed 2 lines
+      35      embeddings: list[list[float]],
+      36      filename: str,
+      37      page_numbers: list[int | None] | None = None,
+      38 -) -> None:                                                     
+      39 -    """Upsert chunk embeddings with metadata payload into Qdran
+         -t."""                                                          
+      38 +) -> list[str]:                                                
+      39 +    """Upsert chunk embeddings with metadata payload into Qdran
+         +t. Returns the list of point IDs."""                           
+      40      points = [
+      41          qdrant_models.PointStruct(
+      42              id=str(uuid.uuid4()),
+     ...
+      53      ]
+      54      await client.upsert(collection_name=collection_name, points
+          =points)
+      55      logger.info("vector_store.upserted", doc_id=doc_id, chunk_c
+          ount=len(points))
+      56 +    return [str(p.id) for p in points]                         
+      57  
+      58  
+      59  async def search_chunks(
+
+⏺ Update(app/services/vector_store.py)
+  ⎿  Added 32 lines
+      119      return response.points
+      120  
+      121  
+      122 +async def scroll_document_chunks(                             
+      123 +    client: AsyncQdrantClient,                                
+      124 +    collection_name: str,                                     
+      125 +    doc_id: str,                                              
+      126 +) -> list[dict]:                                              
+      127 +    """Return all chunks for a doc_id as a list of payload dic
+          +ts (including 'id')."""                                       
+      128 +    results: list[dict] = []                                  
+      129 +    offset = None                                             
+      130 +    while True:                                               
+      131 +        points, next_offset = await client.scroll(            
+      132 +            collection_name=collection_name,                  
+      133 +            scroll_filter=qdrant_models.Filter(               
+      134 +                must=[                                        
+      135 +                    qdrant_models.FieldCondition(             
+      136 +                        key="doc_id",                         
+      137 +                        match=qdrant_models.MatchValue(value=d
+          +oc_id),                                                       
+      138 +                    )                                         
+      139 +                ]                                             
+      140 +            ),                                                
+      141 +            limit=100,                                        
+      142 +            offset=offset,                                    
+      143 +            with_payload=True,                                
+      144 +            with_vectors=False,                               
+      145 +        )                                                     
+      146 +        for point in points:                                  
+      147 +            results.append({"id": str(point.id), **(point.payl
+          +oad or {})})                                                  
+      148 +        if next_offset is None:                               
+      149 +            break                                             
+      150 +        offset = next_offset                                  
+      151 +    return results                                            
+      152 +                                                              
+      153 +                                                              
+      154  async def count_collection(client: AsyncQdrantClient, collecti
+           on_name: str) -> int:
+      155      """Return the total number of points in the collection."""
+      156      result = await client.count(collection_name=collection_nam
+           e, exact=True)
+
+⏺ Now update routers/qa.py to use the retriever:
+
+⏺ Write(app/routers/qa.py)
+  ⎿  Added 37 lines, removed 32 lines
+       3  
+       4  from app import database
+       5  from app.models import AskRequest, AskResponse, ChunkSource, Gl
+          obalAskRequest, GlobalAskResponse, GlobalChunkSource
+       6 -from app.services.embedder import async_encode_query           
+       6  from app.services.llm import generate_answer
+       8 -from app.services.vector_store import search_chunks, search_chu
+         -nks_global                                                     
+       7 +from app.services.retriever import retrieve, retrieve_global   
+       8  
+       9  logger = structlog.get_logger(__name__)
+      10  router = APIRouter()
+     ...
+      20      if not doc:
+      21          raise HTTPException(status_code=404, detail=f"Document 
+          '{body.document_id}' not found.")
+      22  
+      24 -    query_vector = await async_encode_query(settings.EMBEDDING_
+         -MODEL, body.question)                                          
+      25 -                                                               
+      26 -    scored_points = await search_chunks(                       
+      27 -        client=qdrant_client,                                  
+      28 -        collection_name=settings.QDRANT_COLLECTION_NAME,       
+      29 -        query_vector=query_vector,                             
+      23 +    results = await retrieve(                                  
+      24 +        question=body.question,                                
+      25          doc_id=body.document_id,
+      26          top_k=body.top_k,
+      27 +        mode=body.search_mode,                                 
+      28 +        rerank=body.rerank,                                    
+      29 +        qdrant_client=qdrant_client,                           
+      30 +        collection_name=settings.QDRANT_COLLECTION_NAME,       
+      31 +        embedding_model=settings.EMBEDDING_MODEL,              
+      32      )
+      33  
+      34 -    chunk_texts = [point.payload["text"] for point in scored_po
+         -ints]                                                          
+      35 -                                                               
+      34      llm_result = await generate_answer(
+      35          question=body.question,
+      38 -        chunks=chunk_texts,                                    
+      36 +        chunks=[r.text for r in results],                      
+      37          model=settings.GROQ_MODEL,
+      38          api_key=settings.GROQ_API_KEY,
+      39      )
+      40  
+      41      sources = [
+      42          ChunkSource(
+      45 -            chunk_index=point.payload.get("chunk_index", i),   
+      46 -            text_excerpt=point.payload["text"][:300],          
+      47 -            score=point.score,                                 
+      48 -            page_number=point.payload.get("page_number"),      
+      43 +            chunk_index=r.chunk_index,                         
+      44 +            text_excerpt=r.text[:300],                         
+      45 +            score=r.score,                                     
+      46 +            page_number=r.page_number,                         
+      47 +            vector_score=r.vector_score,                       
+      48 +            bm25_score=r.bm25_score,                           
+      49          )
+      50 -        for i, point in enumerate(scored_points)               
+      50 +        for r in results                                       
+      51      ]
+      52  
+      53      logger.info(
+     ...
+      55          doc_id=body.document_id,
+      56          question_len=len(body.question),
+      57          sources_count=len(sources),
+      58 +        mode=body.search_mode,                                 
+      59 +        rerank=body.rerank,                                    
+      60      )
+      61  
+      62      return AskResponse(
+     ...
+       74      settings = request.app.state.settings
+       75      qdrant_client = request.app.state.qdrant_client
+       76  
+       75 -    query_vector = await async_encode_query(settings.EMBEDDING
+          -_MODEL, body.question)                                        
+       76 -                                                              
+       77 -    scored_points = await search_chunks_global(               
+       78 -        client=qdrant_client,                                 
+       79 -        collection_name=settings.QDRANT_COLLECTION_NAME,      
+       80 -        query_vector=query_vector,                            
+       77 +    results = await retrieve_global(                          
+       78 +        question=body.question,                               
+       79          top_k=body.top_k,
+       80 +        mode=body.search_mode,                                
+       81 +        rerank=body.rerank,                                   
+       82 +        qdrant_client=qdrant_client,                          
+       83 +        collection_name=settings.QDRANT_COLLECTION_NAME,      
+       84 +        embedding_model=settings.EMBEDDING_MODEL,             
+       85      )
+       86  
+       84 -    chunk_texts = [point.payload["text"] for point in scored_p
+          -oints]                                                        
+       85 -                                                              
+       87      llm_result = await generate_answer(
+       88          question=body.question,
+       88 -        chunks=chunk_texts,                                   
+       89 +        chunks=[r.text for r in results],                     
+       90          model=settings.GROQ_MODEL,
+       91          api_key=settings.GROQ_API_KEY,
+       92      )
+       93  
+       94      sources = [
+       95          GlobalChunkSource(
+       95 -            chunk_index=point.payload.get("chunk_index", i),  
+       96 -            text_excerpt=point.payload["text"][:300],         
+       97 -            score=point.score,                                
+       98 -            page_number=point.payload.get("page_number"),     
+       99 -            filename=point.payload.get("filename", ""),       
+      100 -            doc_id=point.payload.get("doc_id", ""),           
+       96 +            chunk_index=r.chunk_index,                        
+       97 +            text_excerpt=r.text[:300],                        
+       98 +            score=r.score,                                    
+       99 +            page_number=r.page_number,                        
+      100 +            vector_score=r.vector_score,                      
+      101 +            bm25_score=r.bm25_score,                          
+      102 +            filename=r.filename,                              
+      103 +            doc_id=r.doc_id,                                  
+      104          )
+      102 -        for i, point in enumerate(scored_points)              
+      105 +        for r in results                                      
+      106      ]
+      107  
+      108      logger.info(
+      109          "qa.answered_global",
+      110          question_len=len(body.question),
+      111          sources_count=len(sources),
+      112 +        mode=body.search_mode,                                
+      113 +        rerank=body.rerank,                                   
+      114      )
+      115  
+      116      return GlobalAskResponse(
+
+⏺ Now update routers/documents.py to wire in the BM25 store:
+
+⏺ Update(app/routers/documents.py)  ⎿  Added 1 line
+       8  
+       9  from app import database
+      10  from app.models import DocumentInfo, UploadResponse
+      11 +from app.services.bm25_store import get_bm25_store             
+      12  from app.services.embedder import async_encode_texts
+      13  from app.services.parser import parse_and_chunk
+      14  from app.services.vector_store import delete_document_chunks, u
+          psert_chunks
+
+⏺ Update(app/routers/documents.py)
+  ⎿  Added 2 lines, removed 1 line
+      68              filename, content, settings.CHUNK_SIZE, settings.CH
+          UNK_OVERLAP
+      69          )
+      70          embeddings = await async_encode_texts(settings.EMBEDDIN
+          G_MODEL, chunks)
+      71 -        await upsert_chunks(                                   
+      71 +        chunk_ids = await upsert_chunks(                       
+      72              client=qdrant_client,
+      73              collection_name=settings.QDRANT_COLLECTION_NAME,
+      74              doc_id=doc_id,
+     ...
+      76              embeddings=embeddings,
+      77              filename=filename,
+      78          )
+      79 +        get_bm25_store().build_index(doc_id=doc_id, chunks=chun
+         +ks, chunk_ids=chunk_ids, filename=filename)                    
+      80          await database.update_document_ingested(
+      81              doc_id=doc_id,
+      82              chunk_count=len(chunks),
+
+⏺ Update(app/routers/documents.py)
+  ⎿  Added 1 line
+      132          raise HTTPException(status_code=404, detail=f"Document
+            '{doc_id}' not found.")
+      133  
+      134      await delete_document_chunks(qdrant_client, settings.QDRAN
+           T_COLLECTION_NAME, doc_id)
+      135 +    get_bm25_store().remove_document(doc_id)                  
+      136      await database.delete_document(doc_id)
+      137      logger.info("documents.deleted", doc_id=doc_id)
+      138      return {"status": "deleted", "doc_id": doc_id}
+
+⏺ Finally, update main.py to rebuild BM25 indexes on startup:
+
+⏺ Update(app/main.py)
+  ⎿  Added 1 line
+      10  from app.config import get_settings
+      11  from app.database import init_db
+      12  from app.routers import documents, health, qa
+      13 +from app.services.bm25_store import rebuild_indexes_from_qdrant
+      14  from app.services.embedder import get_embedder
+      15  from app.services.vector_store import init_collection
+      16  
+
+⏺ Update(app/main.py)
+  ⎿  Added 3 lines
+      48      # Pre-load embedding model (blocks until ready)
+      49      get_embedder(settings.EMBEDDING_MODEL)
+      50  
+      51 +    # Rebuild BM25 indexes from existing Qdrant data           
+      52 +    await rebuild_indexes_from_qdrant(qdrant_client, settings.Q
+         +DRANT_COLLECTION_NAME)                                         
+      53 +                                                               
+      54      logger.info(
+      55          "app.started",
+      56          env=settings.APP_ENV,
+
+⏺ Now let's verify the backend imports cleanly with no syntax errors:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Let's also run a quick smoke test of the BM25 logic:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ All working correctly. Here's a summary of every change made:
+
+  New files:
+  - services/bm25_store.py — BM25Store singleton with per-chunk metadata
+  storage, search, search_all, remove_document, and rebuild_indexes_from_qdrant
+  which scrolls all Qdrant points on startup
+  - services/retriever.py — retrieve and retrieve_global orchestrators
+  implementing the full pipeline; reciprocal_rank_fusion; cross-encoder reranker
+  singleton loaded lazily in a thread executor
+
+  Modified files:
+  - models.py — Added SearchMode enum; search_mode/rerank fields on AskRequest
+  and GlobalAskRequest; vector_score/bm25_score on ChunkSource
+  - services/vector_store.py — upsert_chunks now returns list[str] (chunk IDs);
+  added scroll_document_chunks
+  - routers/qa.py — Both endpoints now call retrieve/retrieve_global instead of
+  calling vector store directly
+  - routers/documents.py — Upload calls bm25_store.build_index after upsert;
+  delete calls bm25_store.remove_document
+  - main.py — Calls rebuild_indexes_from_qdrant on startup to populate BM25 from
+  existing Qdrant data
+
+  The cross-encoder (cross-encoder/ms-marco-MiniLM-L-6-v2, ~80MB) downloads on
+  the first request with rerank=True. All three modes (vector, hybrid, keyword)
+  are selectable per request, defaulting to hybrid.
+
+✻ Cooked for 7m 23s
+
+※ recap: Upgraded the RAG retrieval system with hybrid search (BM25 + vector + RRF fusion) and cross-encoder reranking. All imports verified and logic tested. Next: start the backend and test an end-to-end query.
+
+❯ where is my backend running i want to see logs                                
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ The backend is already running on http://localhost:8000.
+
+  To see live logs, run this in your terminal:
+
+  ! cd /Users/priyankashaktawat/projects/doc-qa-assistant/backend && uv run
+  uvicorn app.main:app --reload --port 8000
+
+  Or if you want to tail the process that's already running, the logs are
+  printing to whichever terminal started it. You can also hit the health
+  endpoint to confirm it's alive:
+
+  ! curl -s http://localhost:8000/api/v1/health | python3 -m json.tool
+
+  The API docs (Swagger UI) are at http://localhost:8000/docs if you want to
+  test the new search_mode and rerank fields interactively.
+
+✻ Sautéed for 11s
+
+❯ I am not able to find where my backend is running, give comand to off using   
+  port                                                                          
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Run this to kill both processes:
+
+  ! kill 65732 67986
+
+  Or as a one-liner you can reuse anytime:
+
+  ! kill $(lsof -ti :8000 -sTCP:LISTEN)
+
+  After that, start fresh with:
+
+  ! cd /Users/priyankashaktawat/projects/doc-qa-assistant/backend && uv run
+  uvicorn app.main:app --reload --port 8000
+
+✻ Crunched for 6s
+
+❯ ctories: ['/Users/priyankashaktawat/projects/doc-qa-assistant/backend']       
+  ERROR:    [Errno 48] Address already in use                                   
+  priyankashaktawat@Priyankas-MacBook-Air backend % uv run uvicorn app.main:app 
+  --reload --port 8000                                                          
+  INFO:     Will watch for changes in these directories:                        
+  ['/Users/priyankashaktawat/projects/doc-qa-assistant/backend']                
+  ERROR:    [Errno 48] Address already in use                                   
+  priyankashaktawat@Priyankas-MacBook-Air backend %                             
+
+⏺ The port is still occupied. Run this to force-kill everything on 8000:
+
+  ! kill -9 $(lsof -ti :8000)
+
+  Then start the server:
+
+  ! cd /Users/priyankashaktawat/projects/doc-qa-assistant/backend && uv run
+  uvicorn app.main:app --reload --port 8000
+
+✻ Worked for 8s
+
+⏺ Background command "Start FastAPI backend from backend/ directory" was stopped
+
+⏺ The background task was killed. Run this in your terminal to start fresh with
+  visible logs:
+
+  kill -9 $(lsof -ti :8000) 2>/dev/null; cd
+  /Users/priyankashaktawat/projects/doc-qa-assistant/backend && uv run uvicorn
+  app.main:app --reload --port 8000
+
+  This kills any lingering process first, then starts the server so you can see
+  all logs directly in your terminal.
+
+✻ Cooked for 3s
+
+❯ I should see vector_candidates=10 bm25_candidates=10 after_rrf=15             
+  after_rerank=5 mode=hybrid but seeing this in my logs         candidates=3    
+  doc_id=2939fdf6-b9ac-4fa8-aa42-9fb20352a970 mode=hybrid                       
+  2026-06-08T11:37:24.501505Z [info     ] retriever.bm25_search                 
+  candidates=3 doc_id=2939fdf6-b9ac-4fa8-aa42-9fb20352a970 mode=hybrid          
+  Loading weights: 100%|████████████████████████████████████████████████|       
+  105/105 [00:00<00:00, 5796.06it/s]                                            
+  2026-06-08T11:37:34.106323Z [info     ] cross_encoder.loaded                  
+  load_time_ms=9604 model=cross-encoder/ms-marco-MiniLM-L-6-v2                  
+  2026-06-08T11:37:34.225595Z [info     ] retriever.done                        
+  doc_id=2939fdf6-b9ac-4fa8-aa42-9fb20352a970 mode=hybrid rerank=True           
+  returned=3                                                                    
+  2026-06-08T11:37:34.925870Z [info     ] llm.generated                         
+  model=llama-3.3-70b-versatile tokens_used=472                                 
+  2026-06-08T11:37:34.926187Z [info     ] qa.answered                           
+  doc_id=2939fdf6-b9ac-4fa8-aa42-9fb20352a970 mode=hybrid question_len=13       
+  rerank=True sources_count=3                                                   
+  2026-06-08T11:37:34.927125Z [info     ] http.request                          
+  duration_ms=11885 method=POST path=/api/v1/qa/ask status=200                  
+  INFO:     127.0.0.1:60082 - "POST /api/v1/qa/ask HTTP/1.1" 200 OK             
+
+⏺ Two issues: the log field names don't match what you expect, and there's no
+  after_rrf stage log. Also — candidates=3 means your document only has 3 chunks
+  total, so top_k*2=10 was requested but Qdrant/BM25 only had 3 to return. Let
+  me fix the logging to show all pipeline stages clearly.
+
+  Read 1 file (ctrl+o to expand)
+
+⏺ I'll replace the scattered per-stage logs with one clear summary line that
+  shows every stage count.
+
+⏺ Update(app/services/retriever.py)  ⎿  Added 7 lines, removed 4 lines
+       97      bm25_results: list[tuple[str, float]],
+       98      mode: SearchMode,
+       99      top_k: int,
+      100 -) -> list[RetrievalResult]:                                   
+      100 +) -> tuple[list[RetrievalResult], int]:                       
+      101 +    """Returns (candidates_after_merge, after_rrf_count)."""  
+      102      if mode == SearchMode.HYBRID:
+      103          merged = reciprocal_rank_fusion(vector_results, bm25_r
+           esults)
+      104          final: list[RetrievalResult] = []
+     ...
+      106              if chunk_id in candidates:
+      107                  candidates[chunk_id].score = rrf_score
+      108                  final.append(candidates[chunk_id])
+      108 -        return final                                          
+      109 +        return final, len(final)                              
+      110      elif mode == SearchMode.VECTOR:
+      110 -        return list(candidates.values())                      
+      111 +        result = list(candidates.values())                    
+      112 +        return result, len(result)                            
+      113      else:  # KEYWORD
+      112 -        return [candidates[cid] for cid, _ in bm25_results if 
+          -cid in candidates]                                            
+      114 +        result = [candidates[cid] for cid, _ in bm25_results i
+          +f cid in candidates]                                          
+      115 +        return result, len(result)                            
+      116  
+      117  
+      118  async def retrieve(
+
+⏺ Update(app/services/retriever.py)
+  ⎿  Added 11 lines, removed 4 lines
+      153                  chunk_index=p.payload.get("chunk_index", 0),
+      154                  page_number=p.payload.get("page_number"),
+      155              )
+      156 -        logger.info("retriever.vector_search", mode=mode, doc_
+          -id=doc_id, candidates=len(vector_results))                    
+      156  
+      157      if mode in (SearchMode.KEYWORD, SearchMode.HYBRID):
+      158          bm25_results = bm25_store.search(doc_id=doc_id, query=
+           question, top_k=candidate_k)
+      159          _apply_bm25_to_candidates(bm25_results, candidates, do
+           c_id, bm25_store)
+      161 -        logger.info("retriever.bm25_search", mode=mode, doc_id
+          -=doc_id, candidates=len(bm25_results))                        
+      160  
+      163 -    final_candidates = _select_final(candidates, vector_result
+          -s, bm25_results, mode, top_k)                                 
+      161 +    final_candidates, after_rrf = _select_final(candidates, ve
+          +ctor_results, bm25_results, mode, top_k)                      
+      162  
+      163      if rerank and final_candidates:
+      164          final_candidates = await _rerank(question, final_candi
+           dates)
+      165  
+      166      final_candidates = final_candidates[:top_k]
+      169 -    logger.info("retriever.done", mode=mode, rerank=rerank, do
+          -c_id=doc_id, returned=len(final_candidates))                  
+      167 +    logger.info(                                              
+      168 +        "retriever.done",                                     
+      169 +        mode=mode,                                            
+      170 +        doc_id=doc_id,                                        
+      171 +        vector_candidates=len(vector_results),                
+      172 +        bm25_candidates=len(bm25_results),                    
+      173 +        after_rrf=after_rrf,                                  
+      174 +        after_rerank=len(final_candidates),                   
+      175 +        rerank=rerank,                                        
+      176 +    )                                                         
+      177      return final_candidates
+      178  
+      179  
+
+⏺ Update(app/services/retriever.py)
+  ⎿  Added 10 lines, removed 4 lines
+      213                  chunk_index=p.payload.get("chunk_index", 0),
+      214                  page_number=p.payload.get("page_number"),
+      215              )
+      216 -        logger.info("retriever.vector_search_global", candidat
+          -es=len(vector_results))                                       
+      216  
+      217      if mode in (SearchMode.KEYWORD, SearchMode.HYBRID):
+      218          bm25_results = bm25_store.search_all(query=question, t
+           op_k=candidate_k)
+      219          _apply_bm25_to_candidates(bm25_results, candidates, ""
+           , bm25_store)
+      221 -        logger.info("retriever.bm25_search_global", candidates
+          -=len(bm25_results))                                           
+      220  
+      223 -    final_candidates = _select_final(candidates, vector_result
+          -s, bm25_results, mode, top_k)                                 
+      221 +    final_candidates, after_rrf = _select_final(candidates, ve
+          +ctor_results, bm25_results, mode, top_k)                      
+      222  
+      223      if rerank and final_candidates:
+      224          final_candidates = await _rerank(question, final_candi
+           dates)
+      225  
+      226      final_candidates = final_candidates[:top_k]
+      229 -    logger.info("retriever.done_global", mode=mode, rerank=rer
+          -ank, returned=len(final_candidates))                          
+      227 +    logger.info(                                              
+      228 +        "retriever.done_global",                              
+      229 +        mode=mode,                                            
+      230 +        vector_candidates=len(vector_results),                
+      231 +        bm25_candidates=len(bm25_results),                    
+      232 +        after_rrf=after_rrf,                                  
+      233 +        after_rerank=len(final_candidates),                   
+      234 +        rerank=rerank,                                        
+      235 +    )                                                         
+      236      return final_candidates
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Restart the backend and you'll now see a single log line per request:
+
+  retriever.done  mode=hybrid  doc_id=...  vector_candidates=3
+  bm25_candidates=3  after_rrf=3  after_rerank=3  rerank=True
+
+  Why you saw candidates=3 instead of 10: your document only has 3 chunks total.
+  top_k*2 = 10 was requested from Qdrant and BM25, but both could only return 3
+  — there's nothing more to return. Upload a larger document (more text) and
+  you'll see higher counts. The pipeline is working correctly; it's just a small
+  document.
+
+✻ Brewed for 1m 23s
+
+❯ cat >> ~/projects/doc-qa-assistant/CLAUDE.md << 'EOF'                         
+                                                                                
+  ### Phase 4 — COMPLETE ✅                                                     
+  Hybrid search and reranking implemented.                                      
+                                                                                
+  **New retrieval pipeline:**                                                   
+  - BM25 keyword index (in-memory, per-document, rebuilt on startup)            
+  - Reciprocal Rank Fusion (RRF) to merge vector + BM25 results                 
+  - Cross-encoder reranking (cross-encoder/ms-marco-MiniLM-L-6-v2)              
+  - Default mode: HYBRID with reranking enabled                                 
+                                                                                
+  **New files:**                                                                
+  - backend/app/services/bm25_store.py — BM25 index management                  
+  - backend/app/services/retriever.py — retrieval orchestrator                  
+                                                                                
+  **AskRequest now accepts:** search_mode (vector|hybrid|keyword), rerank       
+  (bool)                                                                        
+  EOF                                                                           
+
+⏺ Let me append that to CLAUDE.md for you.
+
+  Read 1 file (ctrl+o to expand)
+
+⏺ Update(~/projects/doc-qa-assistant/CLAUDE.md)
+  ⎿  Added 15 lines
+      125  - Frontend: global search mode, status badges, richer metadata
+            display
+      126  
+      127  **Data model addition:** content_hash column in SQLite documen
+           ts table
+      128 +                                                              
+      129 +### Phase 4 — COMPLETE ✅                                     
+      130 +Hybrid search and reranking implemented.                      
+      131 +                                                              
+      132 +**New retrieval pipeline:**                                   
+      133 +- BM25 keyword index (in-memory, per-document, rebuilt on star
+          +tup)                                                          
+      134 +- Reciprocal Rank Fusion (RRF) to merge vector + BM25 results 
+      135 +- Cross-encoder reranking (cross-encoder/ms-marco-MiniLM-L-6-v
+          +2)                                                            
+      136 +- Default mode: HYBRID with reranking enabled                 
+      137 +                                                              
+      138 +**New files:**                                                
+      139 +- backend/app/services/bm25_store.py — BM25 index management  
+      140 +- backend/app/services/retriever.py — retrieval orchestrator  
+      141 +                                                              
+      142 +**AskRequest now accepts:** search_mode (vector|hybrid|keyword
+          +), rerank (bool)                                              
+
+⏺ Done. Phase 4 is now documented in CLAUDE.md.
+
+✻ Cogitated for 24s

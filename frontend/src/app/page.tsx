@@ -10,11 +10,12 @@ import ChatWindow, { type Message } from "@/components/ChatWindow";
 import {
   listDocuments,
   deleteDocument,
-  askQuestion,
+  askQuestionStream,
   askGlobal,
   healthCheck,
   DuplicateDocumentError,
   type DocumentInfo,
+  type ChunkSource,
 } from "@/lib/api";
 
 export default function Home() {
@@ -100,7 +101,7 @@ export default function Home() {
 
   /* ── Send question ── */
   const handleSend = useCallback(
-    async (text: string) => {
+    (text: string) => {
       if (isAsking) return;
       if (!activeDocId && !isGlobal) return;
 
@@ -110,8 +111,9 @@ export default function Home() {
         content: text,
         timestamp: new Date(),
       };
+      const loadingId = nanoid();
       const loadingMsg: Message = {
-        id: nanoid(),
+        id: loadingId,
         role: "assistant",
         content: "",
         timestamp: new Date(),
@@ -122,39 +124,46 @@ export default function Home() {
       setMessages((prev) => [...prev, userMsg, loadingMsg]);
       setIsAsking(true);
 
-      try {
-        if (isGlobal) {
-          const res = await askGlobal({ question: text, top_k: 10 });
-          const assistantMsg: Message = {
-            id: loadingMsg.id,
-            role: "assistant",
-            content: res.answer,
-            timestamp: new Date(),
-            sources: res.sources,
-            isGlobal: true,
-          };
-          setMessages((prev) =>
-            prev.map((m) => (m.id === loadingMsg.id ? assistantMsg : m))
-          );
-        } else if (activeDocId) {
-          const res = await askQuestion({ question: text, document_id: activeDocId });
-          const assistantMsg: Message = {
-            id: loadingMsg.id,
-            role: "assistant",
-            content: res.answer,
-            timestamp: new Date(),
-            sources: res.sources,
-            isGlobal: false,
-          };
-          setMessages((prev) =>
-            prev.map((m) => (m.id === loadingMsg.id ? assistantMsg : m))
-          );
-        }
-      } catch (err) {
-        setMessages((prev) => prev.filter((m) => m.id !== loadingMsg.id));
-        toast.error(err instanceof Error ? err.message : "Failed to get answer");
-      } finally {
-        setIsAsking(false);
+      if (isGlobal) {
+        askGlobal({ question: text, top_k: 10 })
+          .then((res) => {
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === loadingId
+                  ? { ...m, content: res.answer, sources: res.sources, isLoading: false }
+                  : m
+              )
+            );
+          })
+          .catch((err) => {
+            setMessages((prev) => prev.filter((m) => m.id !== loadingId));
+            toast.error(err instanceof Error ? err.message : "Failed to get answer");
+          })
+          .finally(() => setIsAsking(false));
+      } else if (activeDocId) {
+        let accumulated = "";
+        askQuestionStream(
+          { question: text, document_id: activeDocId },
+          (chunk) => {
+            accumulated += chunk;
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === loadingId ? { ...m, content: accumulated, isLoading: false } : m
+              )
+            );
+          },
+          (sources: ChunkSource[]) => {
+            setMessages((prev) =>
+              prev.map((m) => (m.id === loadingId ? { ...m, sources } : m))
+            );
+          },
+          () => setIsAsking(false),
+          (err) => {
+            setMessages((prev) => prev.filter((m) => m.id !== loadingId));
+            toast.error(err.message);
+            setIsAsking(false);
+          }
+        );
       }
     },
     [activeDocId, isGlobal, isAsking]

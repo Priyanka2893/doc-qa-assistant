@@ -69,15 +69,24 @@ class TestListDocuments:
 
 class TestUploadDocument:
     async def test_upload_txt_succeeds(self, http_client):
+        from app.services.parser import DocumentMetadata as ParserDocMeta, ParseResult
+
         client, mock_qdrant = http_client
         mock_qdrant.upsert = AsyncMock()
 
         content = b"This is a test document. " * 30
+        fake_result = ParseResult(
+            text="chunk1 chunk2",
+            chunks=["chunk1", "chunk2"],
+            page_count=1,
+            metadata=ParserDocMeta(language="en", word_count=4, file_format="txt"),
+        )
 
         with (
             patch("app.routers.documents.database.get_document_by_hash", new_callable=AsyncMock, return_value=None),
             patch("app.routers.documents.database.insert_document", new_callable=AsyncMock),
-            patch("app.routers.documents.parse_and_chunk", return_value=(["chunk1", "chunk2"], 1)),
+            patch("app.routers.documents.parse_and_chunk", return_value=fake_result),
+            patch("app.routers.documents.get_embedder", return_value=MagicMock()),
             patch("app.routers.documents.async_encode_texts", new_callable=AsyncMock,
                   return_value=[[0.1] * 384, [0.2] * 384]),
             patch("app.routers.documents.upsert_chunks", new_callable=AsyncMock),
@@ -94,12 +103,14 @@ class TestUploadDocument:
         assert body["chunk_count"] == 2
         assert body["status"] == "success"
         assert "doc_id" in body
+        assert "ingestion_report" in body
+        assert "document_metadata" in body
 
     async def test_upload_unsupported_type_returns_400(self, http_client):
         client, _ = http_client
         resp = await client.post(
             "/api/v1/documents/upload",
-            files={"file": ("report.docx", io.BytesIO(b"data"), "application/octet-stream")},
+            files={"file": ("report.xlsx", io.BytesIO(b"data"), "application/octet-stream")},
         )
         assert resp.status_code == 400
 

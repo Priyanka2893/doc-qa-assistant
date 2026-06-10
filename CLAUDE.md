@@ -140,3 +140,46 @@ Hybrid search and reranking implemented.
 - backend/app/services/retriever.py — retrieval orchestrator
 
 **AskRequest now accepts:** search_mode (vector|hybrid|keyword), rerank (bool)
+
+### Phase 5 — COMPLETE ✅
+Production hardening implemented.
+
+**New capabilities:**
+- Rate limiting via slowapi: upload 10/min, ask 60/min, ask-global 30/min (429 on exceed)
+- Request ID middleware: UUID4 per request, X-Request-ID response header, contextvars for structlog
+- Request logging middleware: structured logs with method, path, status, duration_ms, request_id
+- Semantic answer cache: TTLCache(500 entries, 1h TTL), invalidated on document delete; AskResponse.cache_hit field
+- Retry with tenacity: Groq API (3 attempts, exp backoff) + Qdrant connection errors
+- File magic byte validation: python-magic MIME check before text extraction
+- SSE streaming endpoint: POST /api/v1/qa/ask-stream — tokens arrive token-by-token
+- Metrics endpoint: GET /api/v1/metrics — docs, chunks, cache, uptime, Qdrant points
+- Liveness/readiness probes: /api/v1/health/live (always 200), /api/v1/health/ready (503 until ready)
+- Frontend streaming: per-document queries use fetch+ReadableStream; tokens appear as they arrive
+
+**New files:**
+- backend/app/limiter.py — slowapi Limiter singleton
+- backend/app/middleware/request_id.py — RequestIDMiddleware + request_id_var ContextVar
+- backend/app/middleware/logging.py — RequestLoggingMiddleware
+- backend/app/services/cache.py — SemanticCache with TTLCache
+
+
+
+### Feature F6 — COMPLETE ✅
+Advanced ingestion pipeline implemented.
+
+**Supported formats:** .pdf, .txt, .docx, .html, .htm, .png, .jpg, .jpeg, .tiff
+**New capabilities:**
+- Multi-format parsing (DOCX via python-docx, HTML via BeautifulSoup, images/scanned PDFs via Tesseract OCR)
+- Text normalization: whitespace, control chars, unicode
+- Exact chunk deduplication (SHA256)
+- Semantic chunk deduplication (cosine similarity > 0.95 threshold)
+- Rich metadata: author, title, language, word_count, file_format
+
+**New files:**
+- backend/app/services/deduplicator.py — exact + semantic dedup
+**Updated files:**
+- backend/app/services/parser.py — multi-format router + normalizer
+- backend/app/database.py — new metadata columns
+- backend/app/models.py — IngestionReport, enriched DocumentInfo
+
+**UploadResponse now includes:** ingestion_report, document_metadata

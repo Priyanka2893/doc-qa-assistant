@@ -23,6 +23,22 @@ class GlobalChunkSource(ChunkSource):
     doc_id: str
 
 
+class DocumentMetadata(BaseModel):
+    author: str | None = None
+    doc_title: str | None = None
+    language: str = "en"
+    word_count: int = 0
+    file_format: str = ""
+
+
+class IngestionReport(BaseModel):
+    original_chunks: int
+    exact_dedup_removed: int
+    semantic_dedup_removed: int
+    final_chunks: int
+    dedup_rate: float
+
+
 class UploadResponse(BaseModel):
     doc_id: str
     filename: str
@@ -30,6 +46,8 @@ class UploadResponse(BaseModel):
     page_count: int
     status: str = "success"
     ingestion_time_ms: int
+    ingestion_report: IngestionReport
+    document_metadata: DocumentMetadata
 
 
 class AskRequest(BaseModel):
@@ -46,6 +64,7 @@ class AskResponse(BaseModel):
     model: str
     tokens_used: int
     doc_id: str
+    cache_hit: bool = False
 
 
 class GlobalAskRequest(BaseModel):
@@ -71,6 +90,16 @@ class DocumentInfo(BaseModel):
     status: str = "ready"
     file_size_bytes: int | None = None
     content_hash: str | None = None
+    author: str | None = None
+    doc_title: str | None = None
+    language: str = "en"
+    word_count: int = 0
+    file_format: str = ""
+    exact_dedup_removed: int = 0
+    semantic_dedup_removed: int = 0
+    supported_formats: list[str] = Field(
+        default=[".pdf", ".txt", ".docx", ".html", ".htm", ".png", ".jpg", ".jpeg", ".tiff"]
+    )
 
 
 class HealthResponse(BaseModel):
@@ -78,3 +107,13 @@ class HealthResponse(BaseModel):
     qdrant: str
     embedding_model: str
     version: str
+
+
+class MetricsResponse(BaseModel):
+    total_documents: int
+    total_chunks: int
+    cache_size: int
+    cache_hit_rate: float
+    uptime_seconds: int
+    embedding_model: str
+    qdrant_points: int

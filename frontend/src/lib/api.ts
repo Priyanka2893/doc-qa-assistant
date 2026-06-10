@@ -42,6 +42,7 @@ export interface AskResponse {
   model: string;
   tokens_used: number;
   doc_id: string;
+  cache_hit: boolean;
 }
 
 export interface GlobalAskRequest {
@@ -184,4 +185,76 @@ export async function deleteDocument(docId: string): Promise<void> {
 export async function healthCheck(): Promise<HealthResponse> {
   const res = await fetch(`${BASE}/health`);
   return handleResponse<HealthResponse>(res);
+}
+
+export function askQuestionStream(
+  request: AskRequest,
+  onChunk: (text: string) => void,
+  onSources: (sources: ChunkSource[]) => void,
+  onDone: () => void,
+  onError?: (error: Error) => void
+): () => void {
+  const controller = new AbortController();
+
+  (async () => {
+    try {
+      const res = await fetch(`${BASE}/qa/ask-stream`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(request),
+        signal: controller.signal,
+      });
+
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error((body as { detail?: string }).detail ?? `HTTP ${res.status}`);
+      }
+
+      if (!res.body) throw new Error("No response body");
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const parts = buffer.split("\n\n");
+        buffer = parts.pop() ?? "";
+
+        for (const part of parts) {
+          const line = part.trim();
+          if (!line.startsWith("data: ")) continue;
+          try {
+            const event = JSON.parse(line.slice(6)) as {
+              type: string;
+              text?: string;
+              sources?: ChunkSource[];
+              tokens_used?: number;
+              detail?: string;
+            };
+            if (event.type === "chunk" && event.text) {
+              onChunk(event.text);
+            } else if (event.type === "sources" && event.sources) {
+              onSources(event.sources);
+            } else if (event.type === "done") {
+              onDone();
+            } else if (event.type === "error") {
+              throw new Error(event.detail ?? "Stream error");
+            }
+          } catch (e) {
+            if (e instanceof SyntaxError) continue;
+            throw e;
+          }
+        }
+      }
+    } catch (err) {
+      if (err instanceof Error && err.name === "AbortError") return;
+      onError?.(err instanceof Error ? err : new Error(String(err)));
+    }
+  })();
+
+  return () => controller.abort();
 }

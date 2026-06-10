@@ -19,9 +19,28 @@ CREATE TABLE IF NOT EXISTS documents (
     chunk_count INTEGER NOT NULL DEFAULT 0,
     uploaded_at TEXT NOT NULL DEFAULT (datetime('now')),
     status TEXT NOT NULL DEFAULT 'processing',
-    content_hash TEXT
+    content_hash TEXT,
+    author TEXT,
+    doc_title TEXT,
+    language TEXT DEFAULT 'en',
+    word_count INTEGER DEFAULT 0,
+    file_format TEXT,
+    exact_dedup_removed INTEGER DEFAULT 0,
+    semantic_dedup_removed INTEGER DEFAULT 0
 );
 """
+
+_MIGRATIONS = [
+    "ALTER TABLE documents ADD COLUMN status TEXT NOT NULL DEFAULT 'ready'",
+    "ALTER TABLE documents ADD COLUMN content_hash TEXT",
+    "ALTER TABLE documents ADD COLUMN author TEXT",
+    "ALTER TABLE documents ADD COLUMN doc_title TEXT",
+    "ALTER TABLE documents ADD COLUMN language TEXT DEFAULT 'en'",
+    "ALTER TABLE documents ADD COLUMN word_count INTEGER DEFAULT 0",
+    "ALTER TABLE documents ADD COLUMN file_format TEXT",
+    "ALTER TABLE documents ADD COLUMN exact_dedup_removed INTEGER DEFAULT 0",
+    "ALTER TABLE documents ADD COLUMN semantic_dedup_removed INTEGER DEFAULT 0",
+]
 
 
 async def init_db() -> None:
@@ -29,11 +48,7 @@ async def init_db() -> None:
     _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     async with aiosqlite.connect(_DB_PATH) as db:
         await db.execute(_CREATE_TABLE_SQL)
-        # Migrate existing DBs that lack newer columns
-        for col_sql in [
-            "ALTER TABLE documents ADD COLUMN status TEXT NOT NULL DEFAULT 'ready'",
-            "ALTER TABLE documents ADD COLUMN content_hash TEXT",
-        ]:
+        for col_sql in _MIGRATIONS:
             try:
                 await db.execute(col_sql)
             except Exception:
@@ -72,12 +87,34 @@ async def insert_document(
         await db.commit()
 
 
-async def update_document_ingested(doc_id: str, chunk_count: int, page_count: int) -> None:
-    """Mark a document as ready after successful ingestion."""
+async def update_document_ingested(
+    doc_id: str,
+    chunk_count: int,
+    page_count: int,
+    author: str | None = None,
+    doc_title: str | None = None,
+    language: str = "en",
+    word_count: int = 0,
+    file_format: str = "",
+    exact_dedup_removed: int = 0,
+    semantic_dedup_removed: int = 0,
+) -> None:
+    """Mark a document as ready after successful ingestion, storing enriched metadata."""
     async with get_db() as db:
         await db.execute(
-            "UPDATE documents SET status = 'ready', chunk_count = ?, page_count = ? WHERE doc_id = ?",
-            (chunk_count, page_count, doc_id),
+            """
+            UPDATE documents
+            SET status = 'ready', chunk_count = ?, page_count = ?,
+                author = ?, doc_title = ?, language = ?, word_count = ?,
+                file_format = ?, exact_dedup_removed = ?, semantic_dedup_removed = ?
+            WHERE doc_id = ?
+            """,
+            (
+                chunk_count, page_count,
+                author, doc_title, language, word_count,
+                file_format, exact_dedup_removed, semantic_dedup_removed,
+                doc_id,
+            ),
         )
         await db.commit()
 
@@ -92,15 +129,18 @@ async def update_document_status(doc_id: str, status: str) -> None:
         await db.commit()
 
 
+_SELECT_COLS = """
+    doc_id, filename, chunk_count, page_count, file_size_bytes, uploaded_at, status,
+    content_hash, author, doc_title, language, word_count, file_format,
+    exact_dedup_removed, semantic_dedup_removed
+"""
+
+
 async def get_document_by_hash(content_hash: str) -> dict | None:
     """Return a document record matching the given SHA256 hash, or None."""
     async with get_db() as db:
         cursor = await db.execute(
-            """
-            SELECT doc_id, filename, chunk_count, page_count, file_size_bytes,
-                   uploaded_at, status, content_hash
-            FROM documents WHERE content_hash = ?
-            """,
+            f"SELECT {_SELECT_COLS} FROM documents WHERE content_hash = ?",
             (content_hash,),
         )
         row = await cursor.fetchone()
@@ -111,11 +151,7 @@ async def list_documents() -> list[dict]:
     """Return all document records ordered by upload time descending."""
     async with get_db() as db:
         cursor = await db.execute(
-            """
-            SELECT doc_id, filename, chunk_count, page_count, file_size_bytes,
-                   uploaded_at, status, content_hash
-            FROM documents ORDER BY uploaded_at DESC
-            """
+            f"SELECT {_SELECT_COLS} FROM documents ORDER BY uploaded_at DESC"
         )
         rows = await cursor.fetchall()
         return [dict(row) for row in rows]
@@ -125,11 +161,7 @@ async def get_document(doc_id: str) -> dict | None:
     """Return a single document record or None if not found."""
     async with get_db() as db:
         cursor = await db.execute(
-            """
-            SELECT doc_id, filename, chunk_count, page_count, file_size_bytes,
-                   uploaded_at, status, content_hash
-            FROM documents WHERE doc_id = ?
-            """,
+            f"SELECT {_SELECT_COLS} FROM documents WHERE doc_id = ?",
             (doc_id,),
         )
         row = await cursor.fetchone()

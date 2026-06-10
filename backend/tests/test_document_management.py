@@ -39,14 +39,25 @@ class TestDocumentManagement:
 
     async def test_status_tracking(self, http_client):
         """Uploaded document should appear with status='ready' in the documents list."""
+        from unittest.mock import MagicMock
+
+        from app.services.parser import DocumentMetadata as ParserDocMeta, ParseResult
+
         client, mock_qdrant = http_client
         mock_qdrant.upsert = AsyncMock()
         content = b"Status tracking test content. " * 30
+        fake_result = ParseResult(
+            text="chunk1 chunk2",
+            chunks=["chunk1", "chunk2"],
+            page_count=2,
+            metadata=ParserDocMeta(language="en", word_count=4, file_format="txt"),
+        )
 
         with (
             patch("app.routers.documents.database.get_document_by_hash", new_callable=AsyncMock, return_value=None),
             patch("app.routers.documents.database.insert_document", new_callable=AsyncMock),
-            patch("app.routers.documents.parse_and_chunk", return_value=(["chunk1", "chunk2"], 2)),
+            patch("app.routers.documents.parse_and_chunk", return_value=fake_result),
+            patch("app.routers.documents.get_embedder", return_value=MagicMock()),
             patch("app.routers.documents.async_encode_texts", new_callable=AsyncMock,
                   return_value=[[0.1] * 384, [0.2] * 384]),
             patch("app.routers.documents.upsert_chunks", new_callable=AsyncMock),
