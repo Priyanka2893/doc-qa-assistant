@@ -1,0 +1,142 @@
+# CLAUDE.md — AI Document Q&A Assistant
+## Project Briefing for Claude Code
+
+### Project Overview
+A production-grade RAG (Retrieval-Augmented Generation) Document Q&A system. 
+Users upload PDFs/text files and ask natural language questions. The backend retrieves 
+relevant chunks and generates answers via Groq LLM.
+
+### Current Status
+- Phase: Bootstrap complete
+- Backend: Not yet scaffolded (start with phase-01-backend-core.md)
+- Frontend: Not yet built
+- Vector DB: Qdrant running on localhost:6333
+
+### Tech Stack
+- Backend: Python 3.12, FastAPI, uv (package manager)
+- Vector DB: Qdrant (Docker, localhost:6333)
+- Embeddings: sentence-transformers/all-MiniLM-L6-v2 (local, CPU)
+- LLM: Groq API (llama-3.3-70b-versatile)
+- Document Parsing: pymupdf (fitz)
+- Chunking: langchain-text-splitters RecursiveCharacterTextSplitter
+- Frontend: Next.js 14, Tailwind CSS, shadcn/ui (Phase 2)
+- Config: pydantic-settings, .env file
+- Logging: structlog
+
+### Project Structure
+doc-qa-assistant/
+├── CLAUDE.md ← this file
+├── docker-compose.yml ← Qdrant
+├── .env ← secrets (git-ignored)
+├── backend/
+│ ├── pyproject.toml ← uv project
+│ ├── app/
+│ │ ├── main.py ← FastAPI app entry
+│ │ ├── config.py ← pydantic settings
+│ │ ├── models.py ← pydantic request/response models
+│ │ ├── routers/
+│ │ │ ├── documents.py ← /upload endpoint
+│ │ │ └── qa.py ← /ask endpoint
+│ │ └── services/
+│ │ ├── parser.py ← PDF/text extraction + chunking
+│ │ ├── embedder.py ← sentence-transformer embeddings
+│ │ ├── vector_store.py ← Qdrant operations
+│ │ └── llm.py ← Groq API calls
+│ └── tests/
+└── frontend/ ← Phase 2
+
+### Key Rules (Always Follow)
+1. Always use `uv run` to execute Python commands in backend/
+2. Read settings ONLY from pydantic-settings (no hardcoded values)
+3. All endpoints must be async
+4. Use structlog for logging (never print())
+5. Handle all errors with proper HTTP status codes
+6. Never commit .env — it's git-ignored
+7. Chunk size: 500 tokens, overlap: 100 tokens
+8. Qdrant collection name: from settings (QDRANT_COLLECTION_NAME)
+9. Top-K retrieval: 5 chunks
+
+### Running the Project
+```bash
+# Start Qdrant {#start-qdrant  data-source-line="280"}
+docker compose up -d
+
+# Start backend (from backend/ directory) {#start-backend-from-backend-directory  data-source-line="283"}
+uv run uvicorn app.main:app --reload --port 8000
+
+# API docs {#api-docs  data-source-line="286"}
+open http://localhost:8000/docs
+``` {data-source-line="288"}
+
+### API Endpoints (Planned)
+- POST /api/v1/documents/upload — Upload & ingest a document
+- GET  /api/v1/documents — List all documents
+- POST /api/v1/qa/ask — Ask a question
+- GET  /api/v1/health — Health check
+
+### Phase 1 — COMPLETE ✅
+Backend core is fully implemented and tested.
+
+**Completed endpoints:**
+- POST /api/v1/documents/upload — file ingestion pipeline
+- GET /api/v1/documents — list all documents
+- DELETE /api/v1/documents/{doc_id} — delete document
+- POST /api/v1/qa/ask — question answering
+- GET /api/v1/health — health check
+
+**Key files:**
+- backend/app/main.py — FastAPI app entry point
+- backend/app/config.py — settings (pydantic-settings)
+- backend/app/services/embedder.py — SentenceTransformer singleton
+- backend/app/services/vector_store.py — Qdrant operations
+- backend/app/services/llm.py — Groq API integration
+
+**Backend runs on:** http://localhost:8000
+**API docs:** http://localhost:8000/docs
+**Next phase:** Build React frontend (phase-02-frontend.md)
+
+### Phase 2 — COMPLETE ✅
+Next.js 14 frontend is implemented.
+
+**Frontend stack:**
+- Next.js 14 App Router, TypeScript
+- Tailwind CSS + shadcn/ui components
+- Dark theme (#0a0a0a background, #3b82f6 accent)
+
+**Key components:**
+- src/components/FileUpload.tsx — drag-drop upload with progress
+- src/components/DocumentSidebar.tsx — document management
+- src/components/ChatWindow.tsx — chat interface
+- src/components/MessageBubble.tsx — messages with source citations
+- src/lib/api.ts — typed API client
+
+**Frontend runs on:** http://localhost:3000
+**API proxy:** /api/backend/* → http://localhost:8000/api/v1/*
+**Next phase:** Multi-document management (phase-03-document-management.md)
+
+### Phase 3 — COMPLETE ✅
+Multi-document management implemented.
+
+**New capabilities:**
+- Duplicate detection via SHA256 content hash
+- Document status tracking (processing/ready/error)
+- GET /api/v1/documents/{doc_id} — single document details
+- POST /api/v1/qa/ask-global — cross-document search
+- Frontend: global search mode, status badges, richer metadata display
+
+**Data model addition:** content_hash column in SQLite documents table
+
+### Phase 4 — COMPLETE ✅
+Hybrid search and reranking implemented.
+
+**New retrieval pipeline:**
+- BM25 keyword index (in-memory, per-document, rebuilt on startup)
+- Reciprocal Rank Fusion (RRF) to merge vector + BM25 results
+- Cross-encoder reranking (cross-encoder/ms-marco-MiniLM-L-6-v2)
+- Default mode: HYBRID with reranking enabled
+
+**New files:**
+- backend/app/services/bm25_store.py — BM25 index management
+- backend/app/services/retriever.py — retrieval orchestrator
+
+**AskRequest now accepts:** search_mode (vector|hybrid|keyword), rerank (bool)
