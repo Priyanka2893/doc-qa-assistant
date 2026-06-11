@@ -9,11 +9,34 @@ from app.limiter import limiter
 from app.middleware.request_id import request_id_var
 from app.models import AskRequest, AskResponse, ChunkSource, GlobalAskRequest, GlobalAskResponse, GlobalChunkSource
 from app.services.cache import get_semantic_cache
+from app.services.confidence_scorer import ScoredChunk, summarize_evidence_quality
 from app.services.llm import generate_answer, generate_answer_stream
 from app.services.retriever import retrieve, retrieve_global
 
 logger = structlog.get_logger(__name__)
 router = APIRouter()
+
+
+def _chunk_source_from_scored(r: ScoredChunk) -> ChunkSource:
+    return ChunkSource(
+        chunk_index=r.chunk_index,
+        text_excerpt=r.text[:300],
+        score=r.confidence.composite_score,
+        page_number=r.page_number,
+        vector_score=r.vector_score,
+        bm25_score=r.bm25_score,
+        confidence_score=r.confidence.composite_score,
+        freshness_score=r.confidence.freshness_score,
+        authority_score=r.confidence.authority_score,
+        agreement_score=r.confidence.agreement_score,
+        retrieval_score=r.confidence.retrieval_score,
+    )
+
+
+def _avg_confidence(chunks: list[ScoredChunk]) -> float:
+    if not chunks:
+        return 0.0
+    return round(sum(c.confidence.composite_score for c in chunks) / len(chunks), 4)
 
 
 @router.post("/qa/ask", response_model=AskResponse)
@@ -32,7 +55,7 @@ async def ask_question(request: Request, body: AskRequest) -> AskResponse:
     if cached is not None:
         return cached.model_copy(update={"cache_hit": True})
 
-    results = await retrieve(
+    output = await retrieve(
         question=body.question,
         doc_id=body.document_id,
         top_k=body.top_k,
@@ -41,7 +64,11 @@ async def ask_question(request: Request, body: AskRequest) -> AskResponse:
         qdrant_client=qdrant_client,
         collection_name=settings.QDRANT_COLLECTION_NAME,
         embedding_model=settings.EMBEDDING_MODEL,
+        min_confidence=settings.MIN_CONFIDENCE_THRESHOLD,
+        confidence_weights=settings.CONFIDENCE_WEIGHTS,
     )
+    results = output.chunks
+    chunks_filtered_out = output.filtered_out
 
     llm_result = await generate_answer(
         question=body.question,
@@ -50,17 +77,8 @@ async def ask_question(request: Request, body: AskRequest) -> AskResponse:
         api_key=settings.GROQ_API_KEY,
     )
 
-    sources = [
-        ChunkSource(
-            chunk_index=r.chunk_index,
-            text_excerpt=r.text[:300],
-            score=r.score,
-            page_number=r.page_number,
-            vector_score=r.vector_score,
-            bm25_score=r.bm25_score,
-        )
-        for r in results
-    ]
+    sources = [_chunk_source_from_scored(r) for r in results]
+    evidence_quality = summarize_evidence_quality(results)
 
     response = AskResponse(
         answer=llm_result["answer"],
@@ -69,6 +87,9 @@ async def ask_question(request: Request, body: AskRequest) -> AskResponse:
         tokens_used=llm_result["tokens_used"],
         doc_id=body.document_id,
         cache_hit=False,
+        evidence_quality=evidence_quality,
+        avg_confidence=_avg_confidence(results),
+        chunks_filtered_out=chunks_filtered_out,
     )
 
     await cache.cache_answer(body.question, body.document_id, response)
@@ -80,6 +101,8 @@ async def ask_question(request: Request, body: AskRequest) -> AskResponse:
         sources_count=len(sources),
         mode=body.search_mode,
         rerank=body.rerank,
+        evidence_quality=evidence_quality,
+        chunks_filtered_out=chunks_filtered_out,
         request_id=request_id_var.get(""),
     )
 
@@ -98,7 +121,7 @@ async def ask_question_stream(request: Request, body: AskRequest) -> StreamingRe
     if not doc:
         raise HTTPException(status_code=404, detail=f"Document '{body.document_id}' not found.")
 
-    results = await retrieve(
+    output = await retrieve(
         question=body.question,
         doc_id=body.document_id,
         top_k=body.top_k,
@@ -107,20 +130,12 @@ async def ask_question_stream(request: Request, body: AskRequest) -> StreamingRe
         qdrant_client=qdrant_client,
         collection_name=settings.QDRANT_COLLECTION_NAME,
         embedding_model=settings.EMBEDDING_MODEL,
+        min_confidence=settings.MIN_CONFIDENCE_THRESHOLD,
+        confidence_weights=settings.CONFIDENCE_WEIGHTS,
     )
+    results = output.chunks
 
-    sources = [
-        ChunkSource(
-            chunk_index=r.chunk_index,
-            text_excerpt=r.text[:300],
-            score=r.score,
-            page_number=r.page_number,
-            vector_score=r.vector_score,
-            bm25_score=r.bm25_score,
-        )
-        for r in results
-    ]
-
+    sources = [_chunk_source_from_scored(r) for r in results]
     sources_payload = [s.model_dump() for s in sources]
     question = body.question
     doc_id = body.document_id
@@ -151,7 +166,7 @@ async def ask_question_global(request: Request, body: GlobalAskRequest) -> Globa
     settings = request.app.state.settings
     qdrant_client = request.app.state.qdrant_client
 
-    results = await retrieve_global(
+    output = await retrieve_global(
         question=body.question,
         top_k=body.top_k,
         mode=body.search_mode,
@@ -159,7 +174,10 @@ async def ask_question_global(request: Request, body: GlobalAskRequest) -> Globa
         qdrant_client=qdrant_client,
         collection_name=settings.QDRANT_COLLECTION_NAME,
         embedding_model=settings.EMBEDDING_MODEL,
+        min_confidence=settings.MIN_CONFIDENCE_THRESHOLD,
+        confidence_weights=settings.CONFIDENCE_WEIGHTS,
     )
+    results = output.chunks
 
     llm_result = await generate_answer(
         question=body.question,
@@ -172,15 +190,22 @@ async def ask_question_global(request: Request, body: GlobalAskRequest) -> Globa
         GlobalChunkSource(
             chunk_index=r.chunk_index,
             text_excerpt=r.text[:300],
-            score=r.score,
+            score=r.confidence.composite_score,
             page_number=r.page_number,
             vector_score=r.vector_score,
             bm25_score=r.bm25_score,
             filename=r.filename,
             doc_id=r.doc_id,
+            confidence_score=r.confidence.composite_score,
+            freshness_score=r.confidence.freshness_score,
+            authority_score=r.confidence.authority_score,
+            agreement_score=r.confidence.agreement_score,
+            retrieval_score=r.confidence.retrieval_score,
         )
         for r in results
     ]
+
+    evidence_quality = summarize_evidence_quality(results)
 
     logger.info(
         "qa.answered_global",
@@ -188,6 +213,8 @@ async def ask_question_global(request: Request, body: GlobalAskRequest) -> Globa
         sources_count=len(sources),
         mode=body.search_mode,
         rerank=body.rerank,
+        evidence_quality=evidence_quality,
+        chunks_filtered_out=output.filtered_out,
         request_id=request_id_var.get(""),
     )
 

@@ -9,7 +9,7 @@ from fastapi.responses import JSONResponse
 
 from app import database
 from app.limiter import limiter
-from app.models import DocumentInfo, DocumentMetadata, IngestionReport, UploadResponse
+from app.models import DocumentInfo, DocumentMetadata, IngestionReport, TrustUpdateRequest, UploadResponse
 from app.services.bm25_store import get_bm25_store
 from app.services.cache import get_semantic_cache
 from app.services.deduplicator import DedupResult, deduplicate_exact, deduplicate_semantic
@@ -163,6 +163,17 @@ async def get_document(doc_id: str) -> DocumentInfo:
     if not doc:
         raise HTTPException(status_code=404, detail=f"Document '{doc_id}' not found.")
     return DocumentInfo(**doc)
+
+
+@router.patch("/documents/{doc_id}/trust")
+async def set_trust_level(doc_id: str, body: TrustUpdateRequest) -> dict:
+    """Set the trust level for a document (verified, internal, external, unknown)."""
+    doc = await database.get_document(doc_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail=f"Document '{doc_id}' not found.")
+    await database.set_document_trust(doc_id, body.trust_level)
+    logger.info("documents.trust_updated", doc_id=doc_id, trust_level=body.trust_level)
+    return {"doc_id": doc_id, "trust_level": body.trust_level}
 
 
 @router.delete("/documents/{doc_id}")

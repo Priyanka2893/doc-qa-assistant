@@ -1,0 +1,1010 @@
+ ▐▛███▜▌   Claude Code v2.1.170
+▝▜█████▛▘  Sonnet 4.6 · Claude Pro
+  ▘▘ ▝▝    ~/projects/doc-qa-assistant/backend
+
+ ▎ Meet Fable 5, our newest model for complex, long-running work. Try anytime with /model.
+ ▎ Included in your plan limits until Jun 22, then switch to usage credits to continue.
+
+❯ Add source confidence scoring to the RAG retrieval pipeline. Read CLAUDE.md   
+  for context. All changes are in the backend.                                  
+                                                                                
+  ## New File: services/confidence_scorer.py                                    
+                                                                                
+  ### Data models                                                               
+  ```python                                                                     
+  @dataclass                                                                    
+  class ConfidenceBreakdown:                                                    
+      retrieval_score: float      # From Qdrant cosine / cross-encoder          
+      freshness_score: float      # Age-based decay                             
+      authority_score: float      # Document trust level                        
+      agreement_score: float      # Cross-chunk agreement                       
+      composite_score: float      # Weighted final score                        
+                                                                                
+      # Weights used                                                            
+      w_retrieval: float = 0.50                                                 
+      w_freshness: float = 0.20                                                 
+      w_authority: float = 0.20                                                 
+      w_agreement: float = 0.10                                                 
+                                                                                
+  @dataclass                                                                    
+  class ScoredChunk:                                                            
+      text: str                                                                 
+      doc_id: str                                                               
+      filename: str                                                             
+      chunk_index: int                                                          
+      page_number: int | None                                                   
+      confidence: ConfidenceBreakdown                                           
+      vector_score: float | None                                                
+      bm25_score: float | None                                                  
+  ``` {data-source-line="92"}                                                   
+                                                                                
+  ### Authority trust registry                                                  
+  Store trust tags in SQLite. Add a document_trust column.                      
+  Provide a function set_document_trust(doc_id, trust_level) where trust_level  
+  is one of: "verified", "internal", "external", "unknown".                     
+  Default on upload: "unknown".                                                 
+  Authority score mapping:                                                      
+    "verified" → 1.0, "internal" → 0.85, "external" → 0.65, "unknown" → 0.50    
+                                                                                
+  ### Main scoring function                                                     
+  ```python                                                                     
+  async def score_chunks(                                                       
+      chunks: list[RetrievalResult],        # From existing retriever.py        
+      uploaded_at_map: dict[str, datetime], # doc_id -> upload datetime         
+      authority_map: dict[str, str],        # doc_id -> trust tag               
+      min_confidence: float = 0.40,                                             
+  ) -> list[ScoredChunk]:                                                       
+  ``` {data-source-line="109"}                                                  
+                                                                                
+  Steps:                                                                        
+  1. For each chunk, compute freshness_score using                              
+  uploaded_at_map[chunk.doc_id]                                                 
+  2. For each chunk, compute authority_score using authority_map[chunk.doc_id]  
+  3. Compute agreement_score: for each chunk, count how many OTHER chunks in    
+  the list have cosine similarity > 0.7 (use chunk embeddings already computed, 
+  or recompute). Normalize to 0-1.                                              
+  4. Compute composite_score using the formula above                            
+  5. Filter out chunks where composite_score < min_confidence                   
+  6. Sort remaining by composite_score descending                               
+  7. Return list[ScoredChunk]                                                   
+                                                                                
+  ### Confidence summary helper                                                 
+  ```python                                                                     
+  def summarize_evidence_quality(scored_chunks: list[ScoredChunk]) -> str:      
+      if not scored_chunks: return "none"                                       
+      avg = sum(c.confidence.composite_score for c in scored_chunks) /          
+  len(scored_chunks)                                                            
+      if avg >= 0.80: return "high"                                             
+      if avg >= 0.60: return "medium"                                           
+      if avg >= 0.40: return "low"                                              
+      return "insufficient"                                                     
+  ``` {data-source-line="129"}                                                  
+                                                                                
+  ## Update database.py                                                         
+                                                                                
+  Add document_trust column:                                                    
+  ```sql                                                                        
+  ALTER TABLE documents ADD COLUMN document_trust TEXT DEFAULT 'unknown';       
+  ``` {data-source-line="136"}                                                  
+  Add functions:                                                                
+  - set_document_trust(doc_id, trust_level) → UPDATE                            
+  - get_document_trust(doc_id) → str                                            
+                                                                                
+  ## Update models.py                                                           
+                                                                                
+  Add to ChunkSource:                                                           
+  ```python                                                                     
+  class ChunkSource(BaseModel):                                                 
+      # ... existing fields ...                                                 
+      confidence_score: float                                                   
+      freshness_score: float                                                    
+      authority_score: float                                                    
+      agreement_score: float                                                    
+      retrieval_score: float                                                    
+  ``` {data-source-line="152"}                                                  
+                                                                                
+  Add to AskResponse:                                                           
+  ```python                                                                     
+  class AskResponse(BaseModel):                                                 
+      # ... existing fields ...                                                 
+      evidence_quality: str           # "high" | "medium" | "low" |             
+  "insufficient" | "none"                                                       
+      avg_confidence: float                                                     
+      chunks_filtered_out: int        # how many chunks were below              
+  min_confidence                                                                
+  ``` {data-source-line="161"}                                                  
+                                                                                
+  ## New endpoint: PATCH /api/v1/documents/{doc_id}/trust                       
+                                                                                
+  Accept body: {"trust_level": "verified" | "internal" | "external" |           
+  "unknown"}                                                                    
+  Call set_document_trust(doc_id, trust_level)                                  
+  Return: {"doc_id": doc_id, "trust_level": trust_level}                        
+                                                                                
+  ## Update services/retriever.py                                               
+                                                                                
+  After the reranking step, call confidence_scorer.score_chunks() with:         
+  - retrieved chunks from reranker                                              
+  - uploaded_at_map: query SQLite for all doc_ids in results                    
+  - authority_map: query SQLite for all doc_ids in results                      
+  - min_confidence from settings (default 0.40)                                 
+                                                                                
+  Return the scored and filtered list.                                          
+                                                                                
+  ## Update settings (config.py)                                                
+                                                                                
+  Add:                                                                          
+  - MIN_CONFIDENCE_THRESHOLD: float = 0.40                                      
+  - CONFIDENCE_WEIGHTS: dict = {"retrieval": 0.50, "freshness": 0.20,           
+  "authority": 0.20, "agreement": 0.10}                                         
+                                                                                
+  ## Update routers/qa.py                                                       
+                                                                                
+  Update to use ScoredChunk instead of RetrievalResult.                         
+  Pass confidence breakdown to ChunkSource in response.                         
+  Set evidence_quality and avg_confidence in AskResponse.                       
+  Log evidence_quality with structlog.                                          
+                                                                                
+  ## Tests: tests/test_confidence.py                                            
+  - test_freshness_decay: create doc with old uploaded_at, verify               
+  freshness_score < 0.5                                                         
+  - test_authority_scoring: set doc trust to "verified", ask question, verify   
+  authority_score = 1.0                                                         
+  - test_low_confidence_filter: mock very low retrieval scores, verify          
+  chunks_filtered_out > 0                                                       
+  - test_evidence_quality_high: all high-scoring chunks → evidence_quality =    
+  "high"                                                                        
+
+⏺ I'll read the existing codebase structure first, then implement the confidence
+  scoring feature systematically.
+
+  Searched for 1 pattern, read 5 files (ctrl+o to expand)
+
+⏺ Now I have a complete picture. Let me also check the documents router before
+  implementing.
+
+  Read 1 file, listed 1 directory (ctrl+o to expand)
+
+⏺ Now I have everything I need. Let me implement all changes systematically.
+
+  Read 2 files (ctrl+o to expand)
+
+⏺ Good. Now I have a complete picture. Let me implement everything in order,
+  starting with the foundational changes.
+
+  Step 1: Update models.py — move RetrievalResult here, add confidence fields to
+  ChunkSource/AskResponse, add TrustUpdateRequest.
+
+⏺ Update(app/models.py)
+  ⎿  Added 21 lines
+       9      KEYWORD = "keyword"
+      10  
+      11  
+      12 +class RetrievalResult(BaseModel):                              
+      13 +    chunk_id: str                                              
+      14 +    text: str                                                  
+      15 +    score: float                                               
+      16 +    vector_score: float | None                                 
+      17 +    bm25_score: float | None                                   
+      18 +    doc_id: str                                                
+      19 +    filename: str                                              
+      20 +    chunk_index: int                                           
+      21 +    page_number: int | None                                    
+      22 +                                                               
+      23 +                                                               
+      24  class ChunkSource(BaseModel):
+      25      chunk_index: int
+      26      text_excerpt: str
+     ...
+      28      page_number: int | None
+      29      vector_score: float | None = None
+      30      bm25_score: float | None = None
+      31 +    confidence_score: float = 0.0                              
+      32 +    freshness_score: float = 0.0                               
+      33 +    authority_score: float = 0.0                               
+      34 +    agreement_score: float = 0.0                               
+      35 +    retrieval_score: float = 0.0                               
+      36  
+      37  
+      38  class GlobalChunkSource(ChunkSource):
+     ...
+      40      doc_id: str
+      41  
+      42  
+      43 +class TrustUpdateRequest(BaseModel):                           
+      44 +    trust_level: str = Field(pattern="^(verified|internal|exter
+         +nal|unknown)$")                                                
+      45 +                                                               
+      46 +                                                               
+      47  class DocumentMetadata(BaseModel):
+      48      author: str | None = None
+      49      doc_title: str | None = None
+
+⏺ Update(app/models.py)
+  ⎿  Added 3 lines
+      86      tokens_used: int
+      87      doc_id: str
+      88      cache_hit: bool = False
+      89 +    evidence_quality: str = "none"                             
+      90 +    avg_confidence: float = 0.0                                
+      91 +    chunks_filtered_out: int = 0                               
+      92  
+      93  
+      94  class GlobalAskRequest(BaseModel):
+
+⏺ Step 2: Update database.py — add document_trust column and trust functions.
+
+⏺ Update(app/database.py)
+  ⎿  Added 2 lines, removed 1 line
+      26      word_count INTEGER DEFAULT 0,
+      27      file_format TEXT,
+      28      exact_dedup_removed INTEGER DEFAULT 0,
+      29 -    semantic_dedup_removed INTEGER DEFAULT 0                   
+      29 +    semantic_dedup_removed INTEGER DEFAULT 0,                  
+      30 +    document_trust TEXT DEFAULT 'unknown'                      
+      31  );
+      32  """
+      33  
+
+⏺ Update(app/database.py)
+  ⎿  Added 1 line
+      41      "ALTER TABLE documents ADD COLUMN file_format TEXT",
+      42      "ALTER TABLE documents ADD COLUMN exact_dedup_removed INTEG
+          ER DEFAULT 0",
+      43      "ALTER TABLE documents ADD COLUMN semantic_dedup_removed IN
+          TEGER DEFAULT 0",
+      44 +    "ALTER TABLE documents ADD COLUMN document_trust TEXT DEFAU
+         +LT 'unknown'",                                                 
+      45  ]
+      46  
+      47  
+
+⏺ Update(app/database.py)
+  ⎿  Added 1 line, removed 1 line
+      134  _SELECT_COLS = """
+      135      doc_id, filename, chunk_count, page_count, file_size_bytes
+           , uploaded_at, status,
+      136      content_hash, author, doc_title, language, word_count, fil
+           e_format,
+      137 -    exact_dedup_removed, semantic_dedup_removed               
+      137 +    exact_dedup_removed, semantic_dedup_removed, document_trus
+          +t                                                             
+      138  """
+      139  
+      140  
+
+⏺ Now add the trust functions at the end of database.py:
+
+⏺ Update(app/database.py)
+  ⎿  Added 19 lines
+      175      async with get_db() as db:
+      176          await db.execute("DELETE FROM documents WHERE doc_id =
+            ?", (doc_id,))
+      177          await db.commit()
+      178 +                                                              
+      179 +                                                              
+      180 +async def set_document_trust(doc_id: str, trust_level: str) ->
+          + None:                                                        
+      181 +    async with get_db() as db:                                
+      182 +        await db.execute(                                     
+      183 +            "UPDATE documents SET document_trust = ? WHERE doc
+          +_id = ?",                                                     
+      184 +            (trust_level, doc_id),                            
+      185 +        )                                                     
+      186 +        await db.commit()                                     
+      187 +                                                              
+      188 +                                                              
+      189 +async def get_document_trust(doc_id: str) -> str:             
+      190 +    async with get_db() as db:                                
+      191 +        cursor = await db.execute(                            
+      192 +            "SELECT document_trust FROM documents WHERE doc_id
+          + = ?",                                                        
+      193 +            (doc_id,),                                        
+      194 +        )                                                     
+      195 +        row = await cursor.fetchone()                         
+      196 +        return row["document_trust"] if row else "unknown"    
+
+⏺ Step 3: Update config.py — add confidence threshold and weights settings.
+
+⏺ Update(app/config.py)
+  ⎿  Added 9 lines
+      30      LOG_LEVEL: str = "INFO"
+      31      ALLOWED_ORIGINS: str = "http://localhost:3000"
+      32  
+      33 +    # Confidence scoring                                       
+      34 +    MIN_CONFIDENCE_THRESHOLD: float = 0.40                     
+      35 +    CONFIDENCE_WEIGHTS: dict[str, float] = {                   
+      36 +        "retrieval": 0.50,                                     
+      37 +        "freshness": 0.20,                                     
+      38 +        "authority": 0.20,                                     
+      39 +        "agreement": 0.10,                                     
+      40 +    }                                                          
+      41  
+      42 +                                                               
+      43  @lru_cache()
+      44  def get_settings() -> Settings:
+      45      return Settings()
+
+⏺ Step 4: Create services/confidence_scorer.py
+
+⏺ Write(app/services/confidence_scorer.py)
+  ⎿  Wrote 170 lines to app/services/confidence_scorer.py
+      1 import math
+      2 from dataclasses import dataclass
+      3 from datetime import datetime, timezone
+      4 
+      5 import numpy as np
+      6 import structlog
+      7 
+      8 from app.models import RetrievalResult
+      9 from app.services.embedder import async_encode_texts
+     … +175 lines (ctrl+o to expand)
+
+⏺ Step 5: Update services/retriever.py — remove local RetrievalResult (now in
+  models), integrate confidence scoring, return RetrieveOutput.
+
+⏺ Write(app/services/retriever.py)
+  ⎿  Added 61 lines, removed 18 lines
+       1  import asyncio
+       2  import time
+       3 +from datetime import datetime                                  
+       4  from functools import lru_cache
+       5 +from typing import NamedTuple                                  
+       6  
+       7  import structlog
+       6 -from pydantic import BaseModel                                 
+       8  from sentence_transformers import CrossEncoder
+       9  
+       9 -from app.models import SearchMode                              
+      10 +from app import database                                       
+      11 +from app.models import RetrievalResult, SearchMode             
+      12  from app.services.bm25_store import get_bm25_store
+      13 +from app.services.confidence_scorer import ScoredChunk, score_c
+         +hunks                                                          
+      14  from app.services.embedder import async_encode_query
+      15  from app.services.vector_store import search_chunks, search_chu
+          nks_global
+      16  
+     ...
+      19  CROSS_ENCODER_MODEL = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+      20  
+      21  
+      19 -class RetrievalResult(BaseModel):                              
+      20 -    chunk_id: str                                              
+      21 -    text: str                                                  
+      22 -    score: float                                               
+      23 -    vector_score: float | None                                 
+      24 -    bm25_score: float | None                                   
+      25 -    doc_id: str                                                
+      26 -    filename: str                                              
+      27 -    chunk_index: int                                           
+      28 -    page_number: int | None                                    
+      22 +class RetrieveOutput(NamedTuple):                              
+      23 +    chunks: list[ScoredChunk]                                  
+      24 +    filtered_out: int                                          
+      25  
+      26  
+      27  @lru_cache(maxsize=1)
+     ...
+      111          return result, len(result)
+      112  
+      113  
+      114 +async def _build_doc_maps(                                    
+      115 +    candidates: list[RetrievalResult],                        
+      116 +) -> tuple[dict[str, datetime], dict[str, str]]:              
+      117 +    """Return (uploaded_at_map, authority_map) for all unique 
+          +doc_ids in candidates."""                                     
+      118 +    uploaded_at_map: dict[str, datetime] = {}                 
+      119 +    authority_map: dict[str, str] = {}                        
+      120 +    for doc_id in {c.doc_id for c in candidates}:             
+      121 +        doc = await database.get_document(doc_id)             
+      122 +        if doc and doc.get("uploaded_at"):                    
+      123 +            try:                                              
+      124 +                uploaded_at_map[doc_id] = datetime.fromisoform
+          +at(doc["uploaded_at"])                                        
+      125 +            except ValueError:                                
+      126 +                pass                                          
+      127 +        authority_map[doc_id] = await database.get_document_tr
+          +ust(doc_id)                                                   
+      128 +    return uploaded_at_map, authority_map                     
+      129 +                                                              
+      130 +                                                              
+      131  async def retrieve(
+      132      question: str,
+      133      doc_id: str,
+     ...
+      137      qdrant_client=None,
+      138      collection_name: str = "",
+      139      embedding_model: str = "",
+      127 -) -> list[RetrievalResult]:                                   
+      140 +    min_confidence: float = 0.40,                             
+      141 +    confidence_weights: dict[str, float] | None = None,       
+      142 +) -> RetrieveOutput:                                          
+      143      bm25_store = get_bm25_store()
+      144      candidates: dict[str, RetrievalResult] = {}
+      145      vector_results: list[tuple[str, float]] = []
+     ...
+      179          final_candidates = await _rerank(question, final_candi
+           dates)
+      180  
+      181      final_candidates = final_candidates[:top_k]
+      182 +    pre_filter_count = len(final_candidates)                  
+      183 +                                                              
+      184 +    uploaded_at_map, authority_map = await _build_doc_maps(fin
+          +al_candidates)                                                
+      185 +    scored = await score_chunks(                              
+      186 +        chunks=final_candidates,                              
+      187 +        uploaded_at_map=uploaded_at_map,                      
+      188 +        authority_map=authority_map,                          
+      189 +        min_confidence=min_confidence,                        
+      190 +        embedding_model=embedding_model,                      
+      191 +        weights=confidence_weights,                           
+      192 +    )                                                         
+      193 +                                                              
+      194      logger.info(
+      195          "retriever.done",
+      196          mode=mode,
+     ...
+      198          vector_candidates=len(vector_results),
+      199          bm25_candidates=len(bm25_results),
+      200          after_rrf=after_rrf,
+      174 -        after_rerank=len(final_candidates),                   
+      201 +        after_rerank=pre_filter_count,                        
+      202 +        after_confidence=len(scored),                         
+      203          rerank=rerank,
+      204      )
+      177 -    return final_candidates                                   
+      205 +    return RetrieveOutput(chunks=scored, filtered_out=pre_filt
+          +er_count - len(scored))                                       
+      206  
+      207  
+      208  async def retrieve_global(
+     ...
+      213      qdrant_client=None,
+      214      collection_name: str = "",
+      215      embedding_model: str = "",
+      188 -) -> list[RetrievalResult]:                                   
+      216 +    min_confidence: float = 0.40,                             
+      217 +    confidence_weights: dict[str, float] | None = None,       
+      218 +) -> RetrieveOutput:                                          
+      219      bm25_store = get_bm25_store()
+      220      candidates: dict[str, RetrievalResult] = {}
+      221      vector_results: list[tuple[str, float]] = []
+     ...
+      254          final_candidates = await _rerank(question, final_candi
+           dates)
+      255  
+      256      final_candidates = final_candidates[:top_k]
+      257 +    pre_filter_count = len(final_candidates)                  
+      258 +                                                              
+      259 +    uploaded_at_map, authority_map = await _build_doc_maps(fin
+          +al_candidates)                                                
+      260 +    scored = await score_chunks(                              
+      261 +        chunks=final_candidates,                              
+      262 +        uploaded_at_map=uploaded_at_map,                      
+      263 +        authority_map=authority_map,                          
+      264 +        min_confidence=min_confidence,                        
+      265 +        embedding_model=embedding_model,                      
+      266 +        weights=confidence_weights,                           
+      267 +    )                                                         
+      268 +                                                              
+      269      logger.info(
+      270          "retriever.done_global",
+      271          mode=mode,
+      272          vector_candidates=len(vector_results),
+      273          bm25_candidates=len(bm25_results),
+      274          after_rrf=after_rrf,
+      233 -        after_rerank=len(final_candidates),                   
+      275 +        after_rerank=pre_filter_count,                        
+      276 +        after_confidence=len(scored),                         
+      277          rerank=rerank,
+      278      )
+      236 -    return final_candidates                                   
+      279 +    return RetrieveOutput(chunks=scored, filtered_out=pre_filt
+          +er_count - len(scored))                                       
+
+⏺ Step 6: Update routers/qa.py — use ScoredChunk/RetrieveOutput, populate
+  confidence fields, log evidence quality.
+
+⏺ Write(app/routers/qa.py)
+  ⎿  Added 54 lines, removed 27 lines
+       9  from app.middleware.request_id import request_id_var
+      10  from app.models import AskRequest, AskResponse, ChunkSource, Gl
+          obalAskRequest, GlobalAskResponse, GlobalChunkSource
+      11  from app.services.cache import get_semantic_cache
+      12 +from app.services.confidence_scorer import ScoredChunk, summari
+         +ze_evidence_quality                                            
+      13  from app.services.llm import generate_answer, generate_answer_s
+          tream
+      14  from app.services.retriever import retrieve, retrieve_global
+      15  
+     ...
+      17  router = APIRouter()
+      18  
+      19  
+      20 +def _chunk_source_from_scored(r: ScoredChunk) -> ChunkSource:  
+      21 +    return ChunkSource(                                        
+      22 +        chunk_index=r.chunk_index,                             
+      23 +        text_excerpt=r.text[:300],                             
+      24 +        score=r.confidence.composite_score,                    
+      25 +        page_number=r.page_number,                             
+      26 +        vector_score=r.vector_score,                           
+      27 +        bm25_score=r.bm25_score,                               
+      28 +        confidence_score=r.confidence.composite_score,         
+      29 +        freshness_score=r.confidence.freshness_score,          
+      30 +        authority_score=r.confidence.authority_score,          
+      31 +        agreement_score=r.confidence.agreement_score,          
+      32 +        retrieval_score=r.confidence.retrieval_score,          
+      33 +    )                                                          
+      34 +                                                               
+      35 +                                                               
+      36 +def _avg_confidence(chunks: list[ScoredChunk]) -> float:       
+      37 +    if not chunks:                                             
+      38 +        return 0.0                                             
+      39 +    return round(sum(c.confidence.composite_score for c in chun
+         +ks) / len(chunks), 4)                                          
+      40 +                                                               
+      41 +                                                               
+      42  @router.post("/qa/ask", response_model=AskResponse)
+      43  @limiter.limit("60/minute")
+      44  async def ask_question(request: Request, body: AskRequest) -> A
+          skResponse:
+     ...
+      55      if cached is not None:
+      56          return cached.model_copy(update={"cache_hit": True})
+      57  
+      35 -    results = await retrieve(                                  
+      58 +    output = await retrieve(                                   
+      59          question=body.question,
+      60          doc_id=body.document_id,
+      61          top_k=body.top_k,
+     ...
+      64          qdrant_client=qdrant_client,
+      65          collection_name=settings.QDRANT_COLLECTION_NAME,
+      66          embedding_model=settings.EMBEDDING_MODEL,
+      67 +        min_confidence=settings.MIN_CONFIDENCE_THRESHOLD,      
+      68 +        confidence_weights=settings.CONFIDENCE_WEIGHTS,        
+      69      )
+      70 +    results = output.chunks                                    
+      71 +    chunks_filtered_out = output.filtered_out                  
+      72  
+      73      llm_result = await generate_answer(
+      74          question=body.question,
+     ...
+      77          api_key=settings.GROQ_API_KEY,
+      78      )
+      79  
+      53 -    sources = [                                                
+      54 -        ChunkSource(                                           
+      55 -            chunk_index=r.chunk_index,                         
+      56 -            text_excerpt=r.text[:300],                         
+      57 -            score=r.score,                                     
+      58 -            page_number=r.page_number,                         
+      59 -            vector_score=r.vector_score,                       
+      60 -            bm25_score=r.bm25_score,                           
+      61 -        )                                                      
+      62 -        for r in results                                       
+      63 -    ]                                                          
+      80 +    sources = [_chunk_source_from_scored(r) for r in results]  
+      81 +    evidence_quality = summarize_evidence_quality(results)     
+      82  
+      83      response = AskResponse(
+      84          answer=llm_result["answer"],
+     ...
+      87          tokens_used=llm_result["tokens_used"],
+      88          doc_id=body.document_id,
+      89          cache_hit=False,
+      90 +        evidence_quality=evidence_quality,                     
+      91 +        avg_confidence=_avg_confidence(results),               
+      92 +        chunks_filtered_out=chunks_filtered_out,               
+      93      )
+      94  
+      95      await cache.cache_answer(body.question, body.document_id, r
+          esponse)
+     ...
+      101          sources_count=len(sources),
+      102          mode=body.search_mode,
+      103          rerank=body.rerank,
+      104 +        evidence_quality=evidence_quality,                    
+      105 +        chunks_filtered_out=chunks_filtered_out,              
+      106          request_id=request_id_var.get(""),
+      107      )
+      108  
+     ...
+      121      if not doc:
+      122          raise HTTPException(status_code=404, detail=f"Document
+            '{body.document_id}' not found.")
+      123  
+      101 -    results = await retrieve(                                 
+      124 +    output = await retrieve(                                  
+      125          question=body.question,
+      126          doc_id=body.document_id,
+      127          top_k=body.top_k,
+     ...
+      130          qdrant_client=qdrant_client,
+      131          collection_name=settings.QDRANT_COLLECTION_NAME,
+      132          embedding_model=settings.EMBEDDING_MODEL,
+      133 +        min_confidence=settings.MIN_CONFIDENCE_THRESHOLD,     
+      134 +        confidence_weights=settings.CONFIDENCE_WEIGHTS,       
+      135      )
+      136 +    results = output.chunks                                   
+      137  
+      112 -    sources = [                                               
+      113 -        ChunkSource(                                          
+      114 -            chunk_index=r.chunk_index,                        
+      115 -            text_excerpt=r.text[:300],                        
+      116 -            score=r.score,                                    
+      117 -            page_number=r.page_number,                        
+      118 -            vector_score=r.vector_score,                      
+      119 -            bm25_score=r.bm25_score,                          
+      120 -        )                                                     
+      121 -        for r in results                                      
+      122 -    ]                                                         
+      123 -                                                              
+      138 +    sources = [_chunk_source_from_scored(r) for r in results] 
+      139      sources_payload = [s.model_dump() for s in sources]
+      140      question = body.question
+      141      doc_id = body.document_id
+     ...
+      166      settings = request.app.state.settings
+      167      qdrant_client = request.app.state.qdrant_client
+      168  
+      154 -    results = await retrieve_global(                          
+      169 +    output = await retrieve_global(                           
+      170          question=body.question,
+      171          top_k=body.top_k,
+      172          mode=body.search_mode,
+     ...
+      174          qdrant_client=qdrant_client,
+      175          collection_name=settings.QDRANT_COLLECTION_NAME,
+      176          embedding_model=settings.EMBEDDING_MODEL,
+      177 +        min_confidence=settings.MIN_CONFIDENCE_THRESHOLD,     
+      178 +        confidence_weights=settings.CONFIDENCE_WEIGHTS,       
+      179      )
+      180 +    results = output.chunks                                   
+      181  
+      182      llm_result = await generate_answer(
+      183          question=body.question,
+     ...
+      190          GlobalChunkSource(
+      191              chunk_index=r.chunk_index,
+      192              text_excerpt=r.text[:300],
+      175 -            score=r.score,                                    
+      193 +            score=r.confidence.composite_score,               
+      194              page_number=r.page_number,
+      195              vector_score=r.vector_score,
+      196              bm25_score=r.bm25_score,
+      197              filename=r.filename,
+      198              doc_id=r.doc_id,
+      199 +            confidence_score=r.confidence.composite_score,    
+      200 +            freshness_score=r.confidence.freshness_score,     
+      201 +            authority_score=r.confidence.authority_score,     
+      202 +            agreement_score=r.confidence.agreement_score,     
+      203 +            retrieval_score=r.confidence.retrieval_score,     
+      204          )
+      205          for r in results
+      206      ]
+      207  
+      208 +    evidence_quality = summarize_evidence_quality(results)    
+      209 +                                                              
+      210      logger.info(
+      211          "qa.answered_global",
+      212          question_len=len(body.question),
+      213          sources_count=len(sources),
+      214          mode=body.search_mode,
+      215          rerank=body.rerank,
+      216 +        evidence_quality=evidence_quality,                    
+      217 +        chunks_filtered_out=output.filtered_out,              
+      218          request_id=request_id_var.get(""),
+      219      )
+      220  
+
+⏺ Step 7: Update routers/documents.py — add the PATCH /documents/{doc_id}/trust
+  endpoint.
+⏺ Update(app/routers/documents.py)
+  ⎿  Added 1 line, removed 1 line
+       9  
+      10  from app import database
+      11  from app.limiter import limiter
+      12 -from app.models import DocumentInfo, DocumentMetadata, Ingestio
+         -nReport, UploadResponse                                        
+      12 +from app.models import DocumentInfo, DocumentMetadata, Ingestio
+         +nReport, TrustUpdateRequest, UploadResponse                    
+      13  from app.services.bm25_store import get_bm25_store
+      14  from app.services.cache import get_semantic_cache
+      15  from app.services.deduplicator import DedupResult, deduplicate_
+          exact, deduplicate_semantic
+
+⏺ Update(app/routers/documents.py)
+  ⎿  Added 11 lines
+      165      return DocumentInfo(**doc)
+      166  
+      167  
+      168 +@router.patch("/documents/{doc_id}/trust")                    
+      169 +async def set_trust_level(doc_id: str, body: TrustUpdateReques
+          +t) -> dict:                                                   
+      170 +    """Set the trust level for a document (verified, internal,
+          + external, unknown)."""                                       
+      171 +    doc = await database.get_document(doc_id)                 
+      172 +    if not doc:                                               
+      173 +        raise HTTPException(status_code=404, detail=f"Document
+          + '{doc_id}' not found.")                                      
+      174 +    await database.set_document_trust(doc_id, body.trust_level
+          +)                                                             
+      175 +    logger.info("documents.trust_updated", doc_id=doc_id, trus
+          +t_level=body.trust_level)                                     
+      176 +    return {"doc_id": doc_id, "trust_level": body.trust_level}
+      177 +                                                              
+      178 +                                                              
+      179  @router.delete("/documents/{doc_id}")
+      180  async def delete_document(doc_id: str, request: Request) -> di
+           ct:
+      181      """Remove a document and all its chunks from Qdrant and SQ
+           Lite."""
+
+⏺ Step 8: Create tests/test_confidence.py
+
+⏺ Write(tests/test_confidence.py)
+  ⎿  Wrote 101 lines to tests/test_confidence.py
+       1 from datetime import datetime, timedelta, timezone
+       2 
+       3 import pytest
+       4 
+       5 from app.models import RetrievalResult
+       6 from app.services.confidence_scorer import (
+       7     _freshness_score,
+       8     score_chunks,
+       9     summarize_evidence_quality,
+      10 )
+     … +101 lines (ctrl+o to expand)
+
+⏺ Now let's run the tests to verify everything works:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ All 4 tests pass. Let's also run the broader test suite to confirm no
+  regressions:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ The 2 failing tests match the pre-existing failures recorded in memory (tests
+  that patch app.routers.qa.async_encode_query — an attribute that was never on
+  that module). Let me verify these were pre-existing before my changes:
+
+  Read 1 file (ctrl+o to expand)
+
+⏺ These are the same pre-existing failures documented in memory —
+  async_encode_query was never imported directly in qa.py, so the patch targets
+  were always wrong. My changes didn't introduce them (59 tests still passing,
+  same 2 pre-existing failures).
+
+  Here's a summary of everything implemented:
+
+  ---
+  New file: services/confidence_scorer.py
+  - ConfidenceBreakdown and ScoredChunk dataclasses
+  - _freshness_score() — exponential decay with 180-day half-life (score < 0.5
+  after ~6 months)
+  - _normalize_retrieval_scores() — min-max normalization across the batch
+  - _compute_agreement_scores() — cosine sim matrix via sentence-transformer
+  embeddings; each chunk counts neighbors with sim > 0.7, normalized to [0, 1]
+  - score_chunks() — assembles all four sub-scores into a weighted composite,
+  filters below min_confidence, returns sorted list[ScoredChunk]
+  - summarize_evidence_quality() — maps avg composite to
+  "high"/"medium"/"low"/"insufficient"/"none"
+
+  database.py — added document_trust TEXT DEFAULT 'unknown' column (with
+  migration), set_document_trust(), and get_document_trust().
+
+  models.py — moved RetrievalResult here (to break the circular import); added
+  confidence fields to ChunkSource; added evidence_quality, avg_confidence,
+  chunks_filtered_out to AskResponse; added TrustUpdateRequest.
+
+  config.py — added MIN_CONFIDENCE_THRESHOLD: float = 0.40 and
+  CONFIDENCE_WEIGHTS: dict[str, float].
+
+  services/retriever.py — retrieve() and retrieve_global() now call
+  score_chunks() after reranking and return RetrieveOutput(chunks, filtered_out)
+  named tuple.
+
+  routers/qa.py — updated both /qa/ask and /qa/ask-stream to use ScoredChunk;
+  /qa/ask response includes evidence_quality, avg_confidence,
+  chunks_filtered_out; logs evidence_quality with structlog.
+
+  routers/documents.py — added PATCH /api/v1/documents/{doc_id}/trust endpoint.
+
+  tests/test_confidence.py — 4 unit tests, all passing.
+
+✻ Cooked for 7m 58s
+
+❯ # First get a doc_id                                                          
+  DOC_ID=$(curl -s http://localhost:8000/api/v1/documents \                     
+    | python3 -c "import sys,json; docs=json.load(sys.stdin);                   
+  print(docs[0]['doc_id']) if docs else print('NO DOCS')")                      
+                                                                                
+  echo "Using doc: $DOC_ID"                                                     
+                                                                                
+  # Set trust to "internal"                                                     
+  curl -s -X PATCH "http://localhost:8000/api/v1/documents/$DOC_ID/trust" \     
+    -H "Content-Type: application/json" \                                       
+    -d '{"trust_level": "internal"}' | python3 -m json.tool                     
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ The backend isn't running. Let me start it and retry:
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ Qdrant isn't running. Let me start it first:
+
+  Ran 3 shell commands (ctrl+o to expand)
+
+⏺ Server is up. Now run your original commands:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ The documents list is empty. Let me check what the list endpoint actually
+  returns, then upload a test document:
+
+  Ran 5 shell commands (ctrl+o to expand)
+
+⏺ The 500 is caused by document_trust being selected by _SELECT_COLS but
+  DocumentInfo not having that field — Pydantic rejects the extra key. Let me
+  fix it:
+
+⏺ Update(app/models.py)
+  ⎿  Added 1 line
+      121      file_format: str = ""
+      122      exact_dedup_removed: int = 0
+      123      semantic_dedup_removed: int = 0
+      124 +    document_trust: str = "unknown"                           
+      125      supported_formats: list[str] = Field(
+      126          default=[".pdf", ".txt", ".docx", ".html", ".htm", ".p
+           ng", ".jpg", ".jpeg", ".tiff"]
+      127      )
+
+⏺ Now restart and re-run the test commands:
+
+  Read 1 file, ran 1 shell command (ctrl+o to expand)
+
+⏺ Port 8000 is still occupied by the old process. Let me kill it cleanly and
+  restart:
+
+  Read 1 file, ran 1 shell command (ctrl+o to expand)
+⏺ The DB has documents with NULL file_format from pre-migration rows.
+  DocumentInfo uses str = "" which doesn't coerce None. This is a pre-existing
+  gap now exposed with the live DB. Fix by making nullable DB columns properly
+  optional:
+
+⏺ Update(app/models.py)
+  ⎿  Added 6 lines, removed 6 lines
+      116      content_hash: str | None = None
+      117      author: str | None = None
+      118      doc_title: str | None = None
+      119 -    language: str = "en"                                      
+      120 -    word_count: int = 0                                       
+      121 -    file_format: str = ""                                     
+      122 -    exact_dedup_removed: int = 0                              
+      123 -    semantic_dedup_removed: int = 0                           
+      124 -    document_trust: str = "unknown"                           
+      119 +    language: str | None = "en"                               
+      120 +    word_count: int | None = 0                                
+      121 +    file_format: str | None = None                            
+      122 +    exact_dedup_removed: int | None = 0                       
+      123 +    semantic_dedup_removed: int | None = 0                    
+      124 +    document_trust: str | None = "unknown"                    
+      125      supported_formats: list[str] = Field(
+      126          default=[".pdf", ".txt", ".docx", ".html", ".htm", ".p
+           ng", ".jpg", ".jpeg", ".tiff"]
+      127      )
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ The endpoint works. Let me also verify the trust persists and is visible on
+  the document:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Everything works correctly. Let's also quickly run the full test suite one
+  more time to confirm my DocumentInfo nullable fix didn't break anything:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ 59 passing, same 2 pre-existing failures. Everything is clean.
+
+  Here's what happened and what was fixed:
+
+  Root cause of the 500: _SELECT_COLS now includes document_trust, which meant
+  all rows were being returned through DocumentInfo(**row). That exposed a
+  pre-existing gap — several DB columns added via migrations have no DEFAULT, so
+  old documents have NULL for fields like file_format, word_count,
+  exact_dedup_removed, semantic_dedup_removed, language. Pydantic V2 rejects
+  None for fields typed as bare str or int. I made those fields str | None / int
+  | None with sensible defaults in DocumentInfo.
+
+  Validation summary for the trust endpoint:
+  - GET /documents/{id} — document_trust: "internal" persists correctly
+  - PATCH /documents/{id}/trust with "bogus" → 422 with pattern-mismatch detail
+  (enforced by the regex on TrustUpdateRequest)
+  - PATCH /documents/{id}/trust with "verified" → {"doc_id": ..., "trust_level":
+  "verified"}
+
+✻ Churned for 3m 57s
+
+※ recap: Added confidence scoring to the RAG pipeline including trust levels, freshness decay, and composite scoring. The backend is running and fully tested. Next: build the frontend UI to display confidence scores and evidence quality. (disable recaps in /config)
+
+❯ curl -s -X PATCH "http://localhost:8000/api/v1/documents/$DOC_ID/trust" \     
+    -H "Content-Type: application/json" \                                       
+    -d '{"trust_level": "verified"}' | python3 -m json.tool                     
+                                                                                
+  curl -s -X POST http://localhost:8000/api/v1/qa/ask \                         
+    -H "Content-Type: application/json" \                                       
+    -d "{\"question\": \"What is the return policy?\", \"document_id\":         
+  \"$DOC_ID\"}" \                                                               
+    | python3 -c "import sys,json; r=json.load(sys.stdin);                      
+  print(f'evidence_quality={r[\"evidence_quality\"]}                            
+  avg_confidence={r[\"avg_confidence\"]}')"                                     
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Works end-to-end. The authority_score=1.0 from "verified" trust is pulling the
+  composite score up to 0.8994, which crosses the ≥0.80 threshold and yields
+  evidence_quality="high".
+
+  To see the full confidence breakdown per source chunk:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ All four sub-scores are visible per source. The numbers make sense:
+
+  ┌──────────────────┬───────┬───────────────────────────────────────────────┐
+  │      Score       │ Value │                      Why                      │
+  ├──────────────────┼───────┼───────────────────────────────────────────────┤
+  │ retrieval_score  │ 1.0   │ Only one chunk returned; min-max collapses to │
+  │                  │       │  1.0                                          │
+  ├──────────────────┼───────┼───────────────────────────────────────────────┤
+  │ freshness_score  │ 0.997 │ Doc uploaded ~minutes ago; half-life of 180   │
+  │                  │       │ days means barely any decay                   │
+  ├──────────────────┼───────┼───────────────────────────────────────────────┤
+  │ authority_score  │ 1.0   │ "verified" trust tag                          │
+  ├──────────────────┼───────┼───────────────────────────────────────────────┤
+  │ agreement_score  │ 0.0   │ Only one chunk, no peers to agree with        │
+  ├──────────────────┼───────┼───────────────────────────────────────────────┤
+  │ confidence_score │ 0.899 │ 0.5×1.0 + 0.2×0.997 + 0.2×1.0 + 0.1×0.0       │
+  └──────────────────┴───────┴───────────────────────────────────────────────┘
+
+  To see agreement_score in action, upload a document with multiple chunks (a
+  longer file) so the agreement computation runs cross-chunk pairwise cosine
+  similarity.
+
+✻ Worked for 23s
+
+❯ cd ~/projects/doc-qa-assistant/backend                                        
+  uv run pytest tests/test_confidence.py -v                                     
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ All 4 pass in 4.6 s. Each test exercises a distinct part of the scorer:
+
+  ┌────────────────────────────┬─────────────────────────────────────────────┐
+  │            Test            │               What it covers                │
+  ├────────────────────────────┼─────────────────────────────────────────────┤
+  │                            │ Calls _freshness_score() directly with a    │
+  │ test_freshness_decay       │ 2-year-old datetime; asserts result < 0.5   │
+  │                            │ (exponential decay with 180-day half-life)  │
+  ├────────────────────────────┼─────────────────────────────────────────────┤
+  │                            │ Passes authority_map={"doc1": "verified"}   │
+  │ test_authority_scoring     │ through score_chunks(); asserts             │
+  │                            │ authority_score == 1.0                      │
+  ├────────────────────────────┼─────────────────────────────────────────────┤
+  │                            │ Two chunks with scores 10.0 and 0.0 — after │
+  │ test_low_confidence_filter │  min-max normalization the low scorer gets  │
+  │                            │ composite ≈ 0.30, below the 0.40 threshold; │
+  │                            │  asserts chunks_filtered_out > 0            │
+  ├────────────────────────────┼─────────────────────────────────────────────┤
+  │                            │ Single verified, fresh chunk normalizes to  │
+  │ test_evidence_quality_high │ composite ≈ 0.90; asserts                   │
+  │                            │ summarize_evidence_quality() returns "high" │
+  └────────────────────────────┴─────────────────────────────────────────────┘
+
+✻ Brewed for 17s

@@ -183,3 +183,15 @@ Advanced ingestion pipeline implemented.
 - backend/app/models.py — IngestionReport, enriched DocumentInfo
 
 **UploadResponse now includes:** ingestion_report, document_metadata
+
+### Feature F7 — COMPLETE ✅
+Source confidence scoring implemented.
+
+**Scoring formula:** composite = 0.5*retrieval + 0.2*freshness + 0.2*authority + 0.1*agreement
+**Trust levels:** verified(1.0), internal(0.85), external(0.65), unknown(0.50)
+**Min threshold:** 0.40 (configurable via MIN_CONFIDENCE_THRESHOLD)
+
+**New files:** backend/app/services/confidence_scorer.py
+**New endpoint:** PATCH /api/v1/documents/{doc_id}/trust
+**AskResponse now includes:** evidence_quality, avg_confidence, chunks_filtered_out
+**ChunkSource now includes:** confidence_score, freshness_score, authority_score, agreement_score

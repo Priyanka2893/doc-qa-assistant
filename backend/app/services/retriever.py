@@ -1,13 +1,16 @@
 import asyncio
 import time
+from datetime import datetime
 from functools import lru_cache
+from typing import NamedTuple
 
 import structlog
-from pydantic import BaseModel
 from sentence_transformers import CrossEncoder
 
-from app.models import SearchMode
+from app import database
+from app.models import RetrievalResult, SearchMode
 from app.services.bm25_store import get_bm25_store
+from app.services.confidence_scorer import ScoredChunk, score_chunks
 from app.services.embedder import async_encode_query
 from app.services.vector_store import search_chunks, search_chunks_global
 
@@ -16,16 +19,9 @@ logger = structlog.get_logger(__name__)
 CROSS_ENCODER_MODEL = "cross-encoder/ms-marco-MiniLM-L-6-v2"
 
 
-class RetrievalResult(BaseModel):
-    chunk_id: str
-    text: str
-    score: float
-    vector_score: float | None
-    bm25_score: float | None
-    doc_id: str
-    filename: str
-    chunk_index: int
-    page_number: int | None
+class RetrieveOutput(NamedTuple):
+    chunks: list[ScoredChunk]
+    filtered_out: int
 
 
 @lru_cache(maxsize=1)
@@ -115,6 +111,23 @@ def _select_final(
         return result, len(result)
 
 
+async def _build_doc_maps(
+    candidates: list[RetrievalResult],
+) -> tuple[dict[str, datetime], dict[str, str]]:
+    """Return (uploaded_at_map, authority_map) for all unique doc_ids in candidates."""
+    uploaded_at_map: dict[str, datetime] = {}
+    authority_map: dict[str, str] = {}
+    for doc_id in {c.doc_id for c in candidates}:
+        doc = await database.get_document(doc_id)
+        if doc and doc.get("uploaded_at"):
+            try:
+                uploaded_at_map[doc_id] = datetime.fromisoformat(doc["uploaded_at"])
+            except ValueError:
+                pass
+        authority_map[doc_id] = await database.get_document_trust(doc_id)
+    return uploaded_at_map, authority_map
+
+
 async def retrieve(
     question: str,
     doc_id: str,
@@ -124,7 +137,9 @@ async def retrieve(
     qdrant_client=None,
     collection_name: str = "",
     embedding_model: str = "",
-) -> list[RetrievalResult]:
+    min_confidence: float = 0.40,
+    confidence_weights: dict[str, float] | None = None,
+) -> RetrieveOutput:
     bm25_store = get_bm25_store()
     candidates: dict[str, RetrievalResult] = {}
     vector_results: list[tuple[str, float]] = []
@@ -164,6 +179,18 @@ async def retrieve(
         final_candidates = await _rerank(question, final_candidates)
 
     final_candidates = final_candidates[:top_k]
+    pre_filter_count = len(final_candidates)
+
+    uploaded_at_map, authority_map = await _build_doc_maps(final_candidates)
+    scored = await score_chunks(
+        chunks=final_candidates,
+        uploaded_at_map=uploaded_at_map,
+        authority_map=authority_map,
+        min_confidence=min_confidence,
+        embedding_model=embedding_model,
+        weights=confidence_weights,
+    )
+
     logger.info(
         "retriever.done",
         mode=mode,
@@ -171,10 +198,11 @@ async def retrieve(
         vector_candidates=len(vector_results),
         bm25_candidates=len(bm25_results),
         after_rrf=after_rrf,
-        after_rerank=len(final_candidates),
+        after_rerank=pre_filter_count,
+        after_confidence=len(scored),
         rerank=rerank,
     )
-    return final_candidates
+    return RetrieveOutput(chunks=scored, filtered_out=pre_filter_count - len(scored))
 
 
 async def retrieve_global(
@@ -185,7 +213,9 @@ async def retrieve_global(
     qdrant_client=None,
     collection_name: str = "",
     embedding_model: str = "",
-) -> list[RetrievalResult]:
+    min_confidence: float = 0.40,
+    confidence_weights: dict[str, float] | None = None,
+) -> RetrieveOutput:
     bm25_store = get_bm25_store()
     candidates: dict[str, RetrievalResult] = {}
     vector_results: list[tuple[str, float]] = []
@@ -224,13 +254,26 @@ async def retrieve_global(
         final_candidates = await _rerank(question, final_candidates)
 
     final_candidates = final_candidates[:top_k]
+    pre_filter_count = len(final_candidates)
+
+    uploaded_at_map, authority_map = await _build_doc_maps(final_candidates)
+    scored = await score_chunks(
+        chunks=final_candidates,
+        uploaded_at_map=uploaded_at_map,
+        authority_map=authority_map,
+        min_confidence=min_confidence,
+        embedding_model=embedding_model,
+        weights=confidence_weights,
+    )
+
     logger.info(
         "retriever.done_global",
         mode=mode,
         vector_candidates=len(vector_results),
         bm25_candidates=len(bm25_results),
         after_rrf=after_rrf,
-        after_rerank=len(final_candidates),
+        after_rerank=pre_filter_count,
+        after_confidence=len(scored),
         rerank=rerank,
     )
-    return final_candidates
+    return RetrieveOutput(chunks=scored, filtered_out=pre_filter_count - len(scored))

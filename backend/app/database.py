@@ -26,7 +26,8 @@ CREATE TABLE IF NOT EXISTS documents (
     word_count INTEGER DEFAULT 0,
     file_format TEXT,
     exact_dedup_removed INTEGER DEFAULT 0,
-    semantic_dedup_removed INTEGER DEFAULT 0
+    semantic_dedup_removed INTEGER DEFAULT 0,
+    document_trust TEXT DEFAULT 'unknown'
 );
 """
 
@@ -40,6 +41,7 @@ _MIGRATIONS = [
     "ALTER TABLE documents ADD COLUMN file_format TEXT",
     "ALTER TABLE documents ADD COLUMN exact_dedup_removed INTEGER DEFAULT 0",
     "ALTER TABLE documents ADD COLUMN semantic_dedup_removed INTEGER DEFAULT 0",
+    "ALTER TABLE documents ADD COLUMN document_trust TEXT DEFAULT 'unknown'",
 ]
 
 
@@ -132,7 +134,7 @@ async def update_document_status(doc_id: str, status: str) -> None:
 _SELECT_COLS = """
     doc_id, filename, chunk_count, page_count, file_size_bytes, uploaded_at, status,
     content_hash, author, doc_title, language, word_count, file_format,
-    exact_dedup_removed, semantic_dedup_removed
+    exact_dedup_removed, semantic_dedup_removed, document_trust
 """
 
 
@@ -173,3 +175,22 @@ async def delete_document(doc_id: str) -> None:
     async with get_db() as db:
         await db.execute("DELETE FROM documents WHERE doc_id = ?", (doc_id,))
         await db.commit()
+
+
+async def set_document_trust(doc_id: str, trust_level: str) -> None:
+    async with get_db() as db:
+        await db.execute(
+            "UPDATE documents SET document_trust = ? WHERE doc_id = ?",
+            (trust_level, doc_id),
+        )
+        await db.commit()
+
+
+async def get_document_trust(doc_id: str) -> str:
+    async with get_db() as db:
+        cursor = await db.execute(
+            "SELECT document_trust FROM documents WHERE doc_id = ?",
+            (doc_id,),
+        )
+        row = await cursor.fetchone()
+        return row["document_trust"] if row else "unknown"

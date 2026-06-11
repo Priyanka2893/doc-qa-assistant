@@ -9,6 +9,18 @@ class SearchMode(str, Enum):
     KEYWORD = "keyword"
 
 
+class RetrievalResult(BaseModel):
+    chunk_id: str
+    text: str
+    score: float
+    vector_score: float | None
+    bm25_score: float | None
+    doc_id: str
+    filename: str
+    chunk_index: int
+    page_number: int | None
+
+
 class ChunkSource(BaseModel):
     chunk_index: int
     text_excerpt: str
@@ -16,11 +28,20 @@ class ChunkSource(BaseModel):
     page_number: int | None
     vector_score: float | None = None
     bm25_score: float | None = None
+    confidence_score: float = 0.0
+    freshness_score: float = 0.0
+    authority_score: float = 0.0
+    agreement_score: float = 0.0
+    retrieval_score: float = 0.0
 
 
 class GlobalChunkSource(ChunkSource):
     filename: str
     doc_id: str
+
+
+class TrustUpdateRequest(BaseModel):
+    trust_level: str = Field(pattern="^(verified|internal|external|unknown)$")
 
 
 class DocumentMetadata(BaseModel):
@@ -65,6 +86,9 @@ class AskResponse(BaseModel):
     tokens_used: int
     doc_id: str
     cache_hit: bool = False
+    evidence_quality: str = "none"
+    avg_confidence: float = 0.0
+    chunks_filtered_out: int = 0
 
 
 class GlobalAskRequest(BaseModel):
@@ -92,11 +116,12 @@ class DocumentInfo(BaseModel):
     content_hash: str | None = None
     author: str | None = None
     doc_title: str | None = None
-    language: str = "en"
-    word_count: int = 0
-    file_format: str = ""
-    exact_dedup_removed: int = 0
-    semantic_dedup_removed: int = 0
+    language: str | None = "en"
+    word_count: int | None = 0
+    file_format: str | None = None
+    exact_dedup_removed: int | None = 0
+    semantic_dedup_removed: int | None = 0
+    document_trust: str | None = "unknown"
     supported_formats: list[str] = Field(
         default=[".pdf", ".txt", ".docx", ".html", ".htm", ".png", ".jpg", ".jpeg", ".tiff"]
     )

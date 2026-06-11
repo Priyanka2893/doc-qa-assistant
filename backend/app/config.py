@@ -30,6 +30,15 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = "INFO"
     ALLOWED_ORIGINS: str = "http://localhost:3000"
 
+    # Confidence scoring
+    MIN_CONFIDENCE_THRESHOLD: float = 0.40
+    CONFIDENCE_WEIGHTS: dict[str, float] = {
+        "retrieval": 0.50,
+        "freshness": 0.20,
+        "authority": 0.20,
+        "agreement": 0.10,
+    }
+
 
 @lru_cache()
 def get_settings() -> Settings:

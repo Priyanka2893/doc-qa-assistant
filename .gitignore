@@ -24,3 +24,5 @@ data/
 # OS
 .DS_Store
 *.swp
+
+.docs
