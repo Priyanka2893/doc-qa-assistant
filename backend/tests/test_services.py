@@ -121,10 +121,13 @@ class TestGenerateAnswer:
         mock_client = AsyncMock()
         mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
 
+        messages = [
+            {"role": "system", "content": "Answer from context."},
+            {"role": "user", "content": "Question: What is return window?"},
+        ]
         with patch("app.services.llm.groq.AsyncGroq", return_value=mock_client):
             result = await generate_answer(
-                question="What is return window?",
-                chunks=["Return window is 30 days from purchase."],
+                messages=messages,
                 model="llama-3.3-70b-versatile",
                 api_key="test-key",
             )
@@ -143,9 +146,10 @@ class TestGenerateAnswer:
             side_effect=groq_lib.RateLimitError("rate limited", response=MagicMock(), body={})
         )
 
+        _msgs = [{"role": "user", "content": "Q?"}]
         with patch("app.services.llm.groq.AsyncGroq", return_value=mock_client):
             with pytest.raises(HTTPException) as exc_info:
-                await generate_answer("Q?", ["chunk"], "model", "key")
+                await generate_answer(_msgs, "model", "key")
         assert exc_info.value.status_code == 429
 
     async def test_api_error_raises_502(self):
@@ -159,7 +163,8 @@ class TestGenerateAnswer:
             side_effect=groq_lib.APIConnectionError(request=MagicMock())
         )
 
+        _msgs = [{"role": "user", "content": "Q?"}]
         with patch("app.services.llm.groq.AsyncGroq", return_value=mock_client):
             with pytest.raises(HTTPException) as exc_info:
-                await generate_answer("Q?", ["chunk"], "model", "key")
+                await generate_answer(_msgs, "model", "key")
         assert exc_info.value.status_code == 502

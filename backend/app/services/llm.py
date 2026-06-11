@@ -7,12 +7,6 @@ from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_ex
 
 logger = structlog.get_logger(__name__)
 
-_SYSTEM_PROMPT = (
-    "You are an expert document analyst. Answer questions based ONLY on the provided document "
-    "excerpts. If the answer is not in the context, say 'I couldn't find information about that "
-    "in the document.' Never make up information."
-)
-
 
 def _log_llm_retry(retry_state) -> None:
     logger.warning(
@@ -29,35 +23,30 @@ def _log_llm_retry(retry_state) -> None:
     reraise=True,
     before_sleep=_log_llm_retry,
 )
-async def _call_groq_with_retry(client: groq.AsyncGroq, model: str, messages: list[dict]):
+async def _call_groq_with_retry(
+    client: groq.AsyncGroq, model: str, messages: list[dict], temperature: float
+):
     return await client.chat.completions.create(
         model=model,
         messages=messages,
-        temperature=0.1,
+        temperature=temperature,
         max_tokens=1024,
     )
 
 
 async def generate_answer(
-    question: str,
-    chunks: list[str],
+    messages: list[dict],
     model: str,
     api_key: str,
+    temperature: float = 0.1,
 ) -> dict:
-    """Call the Groq API to generate an answer grounded in the provided chunks.
+    """Call the Groq API with a pre-built messages array.
 
     Returns a dict with keys: answer, tokens_used, model.
     """
-    context = "\n\n".join(f"[{i + 1}] {chunk}" for i, chunk in enumerate(chunks))
-    user_message = f"Document excerpts:\n{context}\n\nQuestion: {question}"
-    messages = [
-        {"role": "system", "content": _SYSTEM_PROMPT},
-        {"role": "user", "content": user_message},
-    ]
-
     client = groq.AsyncGroq(api_key=api_key)
     try:
-        response = await _call_groq_with_retry(client, model, messages)
+        response = await _call_groq_with_retry(client, model, messages, temperature)
     except groq.RateLimitError as exc:
         logger.warning("llm.rate_limit", error=str(exc))
         raise HTTPException(status_code=429, detail="LLM rate limit exceeded. Please retry shortly.")
@@ -72,24 +61,18 @@ async def generate_answer(
 
 
 async def generate_answer_stream(
-    question: str,
-    chunks: list[str],
+    messages: list[dict],
     model: str,
     api_key: str,
+    temperature: float = 0.1,
 ) -> AsyncGenerator[str, None]:
     """Async generator yielding text fragments from Groq streaming API."""
-    context = "\n\n".join(f"[{i + 1}] {chunk}" for i, chunk in enumerate(chunks))
-    user_message = f"Document excerpts:\n{context}\n\nQuestion: {question}"
-
     client = groq.AsyncGroq(api_key=api_key)
     try:
         stream = await client.chat.completions.create(
             model=model,
-            messages=[
-                {"role": "system", "content": _SYSTEM_PROMPT},
-                {"role": "user", "content": user_message},
-            ],
-            temperature=0.1,
+            messages=messages,
+            temperature=temperature,
             max_tokens=1024,
             stream=True,
         )

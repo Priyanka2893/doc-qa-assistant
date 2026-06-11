@@ -195,3 +195,18 @@ Source confidence scoring implemented.
 **New endpoint:** PATCH /api/v1/documents/{doc_id}/trust
 **AskResponse now includes:** evidence_quality, avg_confidence, chunks_filtered_out
 **ChunkSource now includes:** confidence_score, freshness_score, authority_score, agreement_score
+
+### Feature F8 — COMPLETE ✅
+Constrained generation and citation-backed responses implemented.
+
+**Response modes:** cited (default), plain, strict_abstain
+**Citation flow:** LLM outputs [Source N] tags → citation_parser.py maps to actual chunks
+**Audit trail:** citation_audit table in SQLite logs every Q&A
+**Temperature:** default 0.1 (deterministic), configurable per request
+
+**New files:**
+- backend/app/services/prompt_builder.py — all prompt templates live here
+- backend/app/services/citation_parser.py — [Source N] tag parsing and mapping
+
+**AskRequest new fields:** response_mode, temperature
+**AskResponse new fields:** cited_sources, unmapped_citations, is_abstention, citation_coverage

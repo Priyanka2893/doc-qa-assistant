@@ -31,6 +31,22 @@ CREATE TABLE IF NOT EXISTS documents (
 );
 """
 
+_CREATE_CITATION_AUDIT_SQL = """
+CREATE TABLE IF NOT EXISTS citation_audit (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    request_id TEXT NOT NULL,
+    doc_id TEXT NOT NULL,
+    question TEXT NOT NULL,
+    answer_preview TEXT,
+    citation_count INTEGER DEFAULT 0,
+    unmapped_count INTEGER DEFAULT 0,
+    is_abstention INTEGER DEFAULT 0,
+    citation_coverage REAL DEFAULT 0,
+    evidence_quality TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
+);
+"""
+
 _MIGRATIONS = [
     "ALTER TABLE documents ADD COLUMN status TEXT NOT NULL DEFAULT 'ready'",
     "ALTER TABLE documents ADD COLUMN content_hash TEXT",
@@ -50,6 +66,7 @@ async def init_db() -> None:
     _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     async with aiosqlite.connect(_DB_PATH) as db:
         await db.execute(_CREATE_TABLE_SQL)
+        await db.execute(_CREATE_CITATION_AUDIT_SQL)
         for col_sql in _MIGRATIONS:
             try:
                 await db.execute(col_sql)
@@ -194,3 +211,32 @@ async def get_document_trust(doc_id: str) -> str:
         )
         row = await cursor.fetchone()
         return row["document_trust"] if row else "unknown"
+
+
+async def insert_citation_audit(
+    request_id: str,
+    doc_id: str,
+    question: str,
+    answer_preview: str,
+    citation_count: int,
+    unmapped_count: int,
+    is_abstention: bool,
+    citation_coverage: float,
+    evidence_quality: str,
+) -> None:
+    async with get_db() as db:
+        await db.execute(
+            """
+            INSERT INTO citation_audit
+                (request_id, doc_id, question, answer_preview,
+                 citation_count, unmapped_count, is_abstention,
+                 citation_coverage, evidence_quality)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                request_id, doc_id, question, answer_preview[:500],
+                citation_count, unmapped_count, int(is_abstention),
+                citation_coverage, evidence_quality,
+            ),
+        )
+        await db.commit()

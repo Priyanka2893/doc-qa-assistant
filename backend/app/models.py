@@ -9,6 +9,12 @@ class SearchMode(str, Enum):
     KEYWORD = "keyword"
 
 
+class ResponseMode(str, Enum):
+    CITED = "cited"
+    PLAIN = "plain"
+    STRICT_ABSTAIN = "strict_abstain"
+
+
 class RetrievalResult(BaseModel):
     chunk_id: str
     text: str
@@ -38,6 +44,17 @@ class ChunkSource(BaseModel):
 class GlobalChunkSource(ChunkSource):
     filename: str
     doc_id: str
+
+
+class CitedSource(BaseModel):
+    tag: str
+    source_number: int
+    chunk_index: int | None
+    page_number: int | None
+    text_excerpt: str
+    filename: str
+    confidence_score: float | None
+    is_unmapped: bool = False
 
 
 class TrustUpdateRequest(BaseModel):
@@ -77,11 +94,17 @@ class AskRequest(BaseModel):
     top_k: int = Field(default=5, ge=1, le=20)
     search_mode: SearchMode = SearchMode.HYBRID
     rerank: bool = True
+    response_mode: ResponseMode = ResponseMode.CITED
+    temperature: float = Field(default=0.1, ge=0.0, le=1.0)
 
 
 class AskResponse(BaseModel):
     answer: str
-    sources: list[ChunkSource]
+    cited_sources: list[CitedSource]
+    unmapped_citations: list[str] = []
+    is_abstention: bool = False
+    citation_coverage: float = 0.0
+    response_mode: str = ResponseMode.CITED
     model: str
     tokens_used: int
     doc_id: str

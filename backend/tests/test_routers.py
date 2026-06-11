@@ -150,22 +150,36 @@ class TestDeleteDocument:
 
 class TestAskEndpoint:
     async def test_ask_returns_answer(self, http_client):
-        client, mock_qdrant = http_client
+        from app.services.confidence_scorer import ConfidenceBreakdown, ScoredChunk
+        from app.services.retriever import RetrieveOutput
 
-        doc = {"doc_id": "doc-1", "filename": "policy.pdf", "chunk_count": 10, "page_count": 2, "uploaded_at": "2026-01-01"}
-        mock_point = MagicMock()
-        mock_point.payload = {"text": "Return window is 30 days.", "chunk_index": 0, "page_number": 1}
-        mock_point.score = 0.9
-        mock_response = MagicMock()
-        mock_response.points = [mock_point]
-        mock_qdrant.query_points = AsyncMock(return_value=mock_response)
+        client, _ = http_client
+
+        doc = {"doc_id": "doc-1", "filename": "policy.pdf", "chunk_count": 10,
+               "page_count": 2, "uploaded_at": "2026-01-01"}
+
+        mock_chunk = ScoredChunk(
+            text="Return window is 30 days.",
+            doc_id="doc-1",
+            filename="policy.pdf",
+            chunk_index=0,
+            page_number=1,
+            confidence=ConfidenceBreakdown(
+                retrieval_score=0.9, freshness_score=0.8,
+                authority_score=0.85, agreement_score=0.7, composite_score=0.85,
+            ),
+            vector_score=0.9,
+            bm25_score=None,
+        )
+        mock_output = RetrieveOutput(chunks=[mock_chunk], filtered_out=0)
 
         with (
             patch("app.routers.qa.database.get_document", new_callable=AsyncMock, return_value=doc),
-            patch("app.routers.qa.async_encode_query", new_callable=AsyncMock, return_value=[0.1] * 384),
-            patch("app.routers.qa.search_chunks", new_callable=AsyncMock, return_value=[mock_point]),
+            patch("app.routers.qa.database.insert_citation_audit", new_callable=AsyncMock),
+            patch("app.routers.qa.retrieve", new_callable=AsyncMock, return_value=mock_output),
             patch("app.routers.qa.generate_answer", new_callable=AsyncMock,
-                  return_value={"answer": "30 days.", "tokens_used": 100, "model": "llama-3.3-70b-versatile"}),
+                  return_value={"answer": "30 days. [Source 1]", "tokens_used": 100,
+                                "model": "llama-3.3-70b-versatile"}),
         ):
             resp = await client.post(
                 "/api/v1/qa/ask",
@@ -174,10 +188,12 @@ class TestAskEndpoint:
 
         assert resp.status_code == 200
         body = resp.json()
-        assert body["answer"] == "30 days."
+        assert "30 days." in body["answer"]
         assert body["doc_id"] == "doc-1"
         assert body["tokens_used"] == 100
-        assert len(body["sources"]) == 1
+        assert len(body["cited_sources"]) == 1
+        assert body["cited_sources"][0]["tag"] == "[Source 1]"
+        assert body["is_abstention"] is False
 
     async def test_ask_nonexistent_doc_returns_404(self, http_client):
         client, _ = http_client

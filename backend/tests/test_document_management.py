@@ -96,32 +96,36 @@ class TestDocumentManagement:
 
     async def test_global_ask(self, http_client):
         """ask-global should search across all docs and return sources with filename/doc_id."""
+        from app.services.confidence_scorer import ConfidenceBreakdown, ScoredChunk
+        from app.services.retriever import RetrieveOutput
+
         client, _ = http_client
 
-        mock_point1 = MagicMock()
-        mock_point1.payload = {
-            "text": "The policy covers remote work arrangements.",
-            "chunk_index": 0,
-            "page_number": 1,
-            "doc_id": "doc-1",
-            "filename": "policy.pdf",
-        }
-        mock_point1.score = 0.92
+        def _chunk(text, doc_id, filename, chunk_index, page_number):
+            return ScoredChunk(
+                text=text,
+                doc_id=doc_id,
+                filename=filename,
+                chunk_index=chunk_index,
+                page_number=page_number,
+                confidence=ConfidenceBreakdown(
+                    retrieval_score=0.9, freshness_score=0.8,
+                    authority_score=0.85, agreement_score=0.7, composite_score=0.85,
+                ),
+                vector_score=0.9,
+                bm25_score=None,
+            )
 
-        mock_point2 = MagicMock()
-        mock_point2.payload = {
-            "text": "Employee benefits include health insurance.",
-            "chunk_index": 2,
-            "page_number": 3,
-            "doc_id": "doc-2",
-            "filename": "benefits.txt",
-        }
-        mock_point2.score = 0.87
+        mock_output = RetrieveOutput(
+            chunks=[
+                _chunk("The policy covers remote work arrangements.", "doc-1", "policy.pdf", 0, 1),
+                _chunk("Employee benefits include health insurance.", "doc-2", "benefits.txt", 2, 3),
+            ],
+            filtered_out=0,
+        )
 
         with (
-            patch("app.routers.qa.async_encode_query", new_callable=AsyncMock, return_value=[0.1] * 384),
-            patch("app.routers.qa.search_chunks_global", new_callable=AsyncMock,
-                  return_value=[mock_point1, mock_point2]),
+            patch("app.routers.qa.retrieve_global", new_callable=AsyncMock, return_value=mock_output),
             patch("app.routers.qa.generate_answer", new_callable=AsyncMock,
                   return_value={
                       "answer": "Remote work is covered; benefits include health insurance.",
