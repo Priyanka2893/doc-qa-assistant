@@ -25,4 +25,4 @@ data/
 .DS_Store
 *.swp
 
-.docs
+docs
