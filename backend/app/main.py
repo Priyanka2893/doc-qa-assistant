@@ -14,7 +14,7 @@ from app.database import init_db
 from app.limiter import limiter
 from app.middleware.logging import RequestLoggingMiddleware
 from app.middleware.request_id import RequestIDMiddleware
-from app.routers import documents, health, qa
+from app.routers import documents, eval, health, qa
 from app.services.bm25_store import rebuild_indexes_from_qdrant
 from app.services.embedder import get_embedder
 from app.services.vector_store import init_collection
@@ -102,3 +102,4 @@ app.add_middleware(
 app.include_router(health.router, prefix="/api/v1", tags=["health"])
 app.include_router(documents.router, prefix="/api/v1", tags=["documents"])
 app.include_router(qa.router, prefix="/api/v1", tags=["qa"])
+app.include_router(eval.router, prefix="/api/v1", tags=["eval"])

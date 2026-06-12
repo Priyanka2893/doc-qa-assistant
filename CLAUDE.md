@@ -212,13 +212,48 @@ Constrained generation and citation-backed responses implemented.
 **AskResponse new fields:** cited_sources, unmapped_citations, is_abstention, citation_coverage
 
 ### Feature F9 — COMPLETE ✅
-Two-layer hallucination guard implemented.
+Two-layer hallucination guard implemented, with post-gen verifier upgraded to a 2-stage hybrid.
 
 **Layer 1 (pre-gen gate):** avg_confidence < PRE_GEN_CONFIDENCE_GATE (0.50) → block LLM call
-**Layer 2 (post-gen verifier):** Jaccard token overlap per sentence → hallucination_risk score
+**Layer 2 (post-gen verifier):** 2-stage per-sentence grounding check:
+- Stage 1 — token fast path: token containment ≥ POST_GEN_TOKEN_FAST_PATH (0.60) → grounded immediately, no embedding
+- Stage 2 — semantic cosine fallback: sentences failing stage 1 are batch-embedded via the existing SentenceTransformer singleton; cosine similarity ≥ POST_GEN_OVERLAP_THRESHOLD (0.50) → grounded
+- Note: semantic cosine cannot detect negation ("Patient has no diabetes" vs "Patient has diabetes" scores ~0.90). For production, replace Stage 2 with an NLI cross-encoder or LLM-as-judge run async off the response path.
+
 **Action on high risk:** configurable "flag" or "block" (HALLUCINATION_ACTION setting)
 
 **New file:** backend/app/services/hallucination_guard.py
 **New table:** hallucination_events in SQLite
 **New endpoint:** GET /api/v1/hallucination/stats
 **AskResponse new fields:** hallucination_risk, is_high_risk, ungrounded_sentences, gate_passed
+**SentenceVerification new field:** grounding_method ("token" | "semantic" | "ungrounded") — indicates which stage made the grounding decision
+**Config:** POST_GEN_TOKEN_FAST_PATH (0.60) — token containment floor for stage 1; POST_GEN_OVERLAP_THRESHOLD (0.50) — semantic cosine threshold for stage 2
+
+### Feature F10 — COMPLETE ✅
+Continuous evaluation pipeline implemented.
+
+**Scoring formula:** overall = 0.30*context_relevance + 0.40*faithfulness + 0.30*answer_relevance
+
+**Metric computation — 2-stage hybrid (mirrors F9):**
+- context_relevance: per-chunk question-token recall; if recall < 0.50 → semantic cosine fallback via SentenceTransformer; final = max(token, semantic); return avg across chunks
+- faithfulness: 1.0 - hallucination_risk (directly from F9 VerificationResult — already semantically grounded)
+- answer_relevance: question-token recall against answer; if recall < 0.50 → semantic cosine fallback; final = max(token, semantic); abstentions score 0.85
+- Token fast path threshold: 0.50 (same spirit as F9's POST_GEN_TOKEN_FAST_PATH)
+- All low-scoring texts (chunks + answer) are batch-embedded in a single encoder call
+
+**Why 2-stage matters:** pure token recall scores "refund timeline" vs "5-7 business days" as 0.50 (only "refund" matches). After semantic fallback the cosine similarity rescues the paraphrase and scores it ~0.85+.
+
+**New files:**
+- backend/app/services/evaluator.py — compute_faithfulness (sync), evaluate_response (async, 2-stage hybrid)
+- backend/app/routers/eval.py — eval endpoints
+- backend/app/eval_runner.py — standalone CLI benchmark runner
+
+**New endpoints:**
+- GET /api/v1/eval/summary?hours=24 — aggregated EvalSummary for last N hours
+- GET /api/v1/eval/document/{doc_id} — per-document EvalSummary
+- POST /api/v1/eval/benchmark — run keyword-recall benchmark suite against a document
+
+**New table:** eval_results in SQLite
+**AskResponse new field:** eval_metrics (EvalMetrics | None) — computed after every successful query
+**CLI usage:** uv run python -m app.eval_runner --doc_id=... --questions_file=... [--base_url=...]
+**CI exit code:** 0 if avg_overall >= 0.70, else 1

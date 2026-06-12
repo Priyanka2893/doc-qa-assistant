@@ -20,6 +20,7 @@ from app.models import (
 from app.services.cache import get_semantic_cache
 from app.services.citation_parser import parse_citations
 from app.services.confidence_scorer import ScoredChunk, summarize_evidence_quality
+from app.services.evaluator import evaluate_response
 from app.services.hallucination_guard import (
     GateResult,
     log_hallucination_event,
@@ -187,6 +188,26 @@ async def ask_question(request: Request, body: AskRequest) -> AskResponse:
         evidence_quality=evidence_quality,
     )
 
+    eval_metrics = await evaluate_response(
+        question=body.question,
+        chunks=results,
+        answer=llm_result["answer"],
+        verification_result=verification,
+        is_abstention=citation_result.is_abstention,
+    )
+    await database.insert_eval_result(
+        request_id=req_id,
+        doc_id=body.document_id,
+        question=body.question,
+        context_relevance=eval_metrics.context_relevance,
+        faithfulness=eval_metrics.faithfulness,
+        answer_relevance=eval_metrics.answer_relevance,
+        overall_score=eval_metrics.overall_score,
+        chunk_count_used=eval_metrics.chunk_count_used,
+        is_abstention=eval_metrics.is_abstention,
+        hallucination_risk=eval_metrics.hallucination_risk,
+    )
+
     response = AskResponse(
         answer=llm_result["answer"],
         cited_sources=cited_sources,
@@ -205,6 +226,7 @@ async def ask_question(request: Request, body: AskRequest) -> AskResponse:
         is_high_risk=verification.is_high_risk,
         ungrounded_sentences=verification.ungrounded_sentences,
         gate_passed=gate_result.passed,
+        eval_metrics=eval_metrics,
     )
 
     await cache.cache_answer(body.question, body.document_id, response)

@@ -46,6 +46,23 @@ CREATE TABLE IF NOT EXISTS hallucination_events (
 );
 """
 
+_CREATE_EVAL_RESULTS_SQL = """
+CREATE TABLE IF NOT EXISTS eval_results (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    request_id TEXT NOT NULL,
+    doc_id TEXT NOT NULL,
+    question_preview TEXT,
+    context_relevance REAL,
+    faithfulness REAL,
+    answer_relevance REAL,
+    overall_score REAL,
+    chunk_count_used INTEGER,
+    is_abstention INTEGER,
+    hallucination_risk REAL,
+    created_at TEXT DEFAULT (datetime('now'))
+);
+"""
+
 _CREATE_CITATION_AUDIT_SQL = """
 CREATE TABLE IF NOT EXISTS citation_audit (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -83,6 +100,7 @@ async def init_db() -> None:
         await db.execute(_CREATE_TABLE_SQL)
         await db.execute(_CREATE_CITATION_AUDIT_SQL)
         await db.execute(_CREATE_HALLUCINATION_EVENTS_SQL)
+        await db.execute(_CREATE_EVAL_RESULTS_SQL)
         for col_sql in _MIGRATIONS:
             try:
                 await db.execute(col_sql)
@@ -285,6 +303,97 @@ async def get_hallucination_stats() -> dict:
         "high_risk_count": stats.get("high_risk_count") or 0,
         "avg_hallucination_risk": round(stats.get("avg_hallucination_risk") or 0.0, 4),
         "recent_events": recent,
+    }
+
+
+async def insert_eval_result(
+    request_id: str,
+    doc_id: str,
+    question: str,
+    context_relevance: float,
+    faithfulness: float,
+    answer_relevance: float,
+    overall_score: float,
+    chunk_count_used: int,
+    is_abstention: bool,
+    hallucination_risk: float,
+) -> None:
+    async with get_db() as db:
+        await db.execute(
+            """
+            INSERT INTO eval_results
+                (request_id, doc_id, question_preview, context_relevance, faithfulness,
+                 answer_relevance, overall_score, chunk_count_used, is_abstention, hallucination_risk)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                request_id, doc_id, question[:200],
+                context_relevance, faithfulness, answer_relevance, overall_score,
+                chunk_count_used, int(is_abstention), hallucination_risk,
+            ),
+        )
+        await db.commit()
+
+
+async def get_eval_summary(hours: int = 24) -> dict:
+    async with get_db() as db:
+        cursor = await db.execute(
+            """
+            SELECT
+                COUNT(*) AS query_count,
+                AVG(context_relevance) AS avg_context_relevance,
+                AVG(faithfulness) AS avg_faithfulness,
+                AVG(answer_relevance) AS avg_answer_relevance,
+                AVG(overall_score) AS avg_overall_score,
+                AVG(CAST(is_abstention AS REAL)) AS abstention_rate,
+                AVG(CASE WHEN hallucination_risk >= 0.40 THEN 1.0 ELSE 0.0 END) AS high_risk_rate
+            FROM eval_results
+            WHERE created_at >= datetime('now', ?)
+            """,
+            (f"-{hours} hours",),
+        )
+        row = await cursor.fetchone()
+    row = dict(row) if row else {}
+    return {
+        "query_count": row.get("query_count") or 0,
+        "avg_context_relevance": round(row.get("avg_context_relevance") or 0.0, 4),
+        "avg_faithfulness": round(row.get("avg_faithfulness") or 0.0, 4),
+        "avg_answer_relevance": round(row.get("avg_answer_relevance") or 0.0, 4),
+        "avg_overall_score": round(row.get("avg_overall_score") or 0.0, 4),
+        "abstention_rate": round(row.get("abstention_rate") or 0.0, 4),
+        "high_risk_rate": round(row.get("high_risk_rate") or 0.0, 4),
+        "time_window_hours": hours,
+    }
+
+
+async def get_doc_eval_summary(doc_id: str) -> dict:
+    async with get_db() as db:
+        cursor = await db.execute(
+            """
+            SELECT
+                COUNT(*) AS query_count,
+                AVG(context_relevance) AS avg_context_relevance,
+                AVG(faithfulness) AS avg_faithfulness,
+                AVG(answer_relevance) AS avg_answer_relevance,
+                AVG(overall_score) AS avg_overall_score,
+                AVG(CAST(is_abstention AS REAL)) AS abstention_rate,
+                AVG(CASE WHEN hallucination_risk >= 0.40 THEN 1.0 ELSE 0.0 END) AS high_risk_rate
+            FROM eval_results
+            WHERE doc_id = ?
+            """,
+            (doc_id,),
+        )
+        row = await cursor.fetchone()
+    row = dict(row) if row else {}
+    return {
+        "query_count": row.get("query_count") or 0,
+        "avg_context_relevance": round(row.get("avg_context_relevance") or 0.0, 4),
+        "avg_faithfulness": round(row.get("avg_faithfulness") or 0.0, 4),
+        "avg_answer_relevance": round(row.get("avg_answer_relevance") or 0.0, 4),
+        "avg_overall_score": round(row.get("avg_overall_score") or 0.0, 4),
+        "abstention_rate": round(row.get("abstention_rate") or 0.0, 4),
+        "high_risk_rate": round(row.get("high_risk_rate") or 0.0, 4),
+        "time_window_hours": 0,
     }
 
 

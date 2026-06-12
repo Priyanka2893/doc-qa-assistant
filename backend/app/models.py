@@ -125,6 +125,7 @@ class AskResponse(BaseModel):
     is_high_risk: bool = False
     ungrounded_sentences: list[str] = []
     gate_passed: bool = True
+    eval_metrics: "EvalMetrics | None" = None
 
 
 class GlobalAskRequest(BaseModel):
@@ -178,3 +179,24 @@ class MetricsResponse(BaseModel):
     uptime_seconds: int
     embedding_model: str
     qdrant_points: int
+
+
+class EvalMetrics(BaseModel):
+    context_relevance: float
+    faithfulness: float
+    answer_relevance: float
+    overall_score: float
+    chunk_count_used: int
+    is_abstention: bool
+    hallucination_risk: float
+
+
+class EvalSummary(BaseModel):
+    query_count: int
+    avg_context_relevance: float
+    avg_faithfulness: float
+    avg_answer_relevance: float
+    avg_overall_score: float
+    abstention_rate: float
+    high_risk_rate: float
+    time_window_hours: int
