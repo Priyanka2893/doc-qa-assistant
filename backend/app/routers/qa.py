@@ -136,12 +136,13 @@ async def ask_question(request: Request, body: AskRequest) -> AskResponse:
     cited_sources = _cited_sources_from_result(citation_result, results)
     evidence_quality = summarize_evidence_quality(results)
 
-    # Layer 2: Post-generation verifier
-    verification = verify_answer(
+    # Layer 2: Post-generation verifier (2-stage: token fast path → semantic cosine fallback)
+    verification = await verify_answer(
         llm_result["answer"],
         results,
-        settings.POST_GEN_OVERLAP_THRESHOLD,
-        settings.HIGH_RISK_THRESHOLD,
+        token_fast_path_threshold=settings.POST_GEN_TOKEN_FAST_PATH,
+        semantic_threshold=settings.POST_GEN_OVERLAP_THRESHOLD,
+        high_risk_threshold=settings.HIGH_RISK_THRESHOLD,
     )
 
     if verification.is_high_risk and settings.HALLUCINATION_ACTION == "block":

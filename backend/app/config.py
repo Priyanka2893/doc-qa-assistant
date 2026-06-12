@@ -41,7 +41,8 @@ class Settings(BaseSettings):
 
     # Hallucination guard
     PRE_GEN_CONFIDENCE_GATE: float = 0.50
-    POST_GEN_OVERLAP_THRESHOLD: float = 0.35
+    POST_GEN_TOKEN_FAST_PATH: float = 0.60   # token containment floor → grounded without embedding
+    POST_GEN_OVERLAP_THRESHOLD: float = 0.50  # semantic cosine threshold for fallback stage
     HIGH_RISK_THRESHOLD: float = 0.40
     HALLUCINATION_ACTION: str = "flag"  # "flag" | "block"
     MIN_RAW_VECTOR_SCORE: float = 0.30  # absolute cosine similarity floor before normalization
