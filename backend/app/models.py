@@ -88,6 +88,15 @@ class UploadResponse(BaseModel):
     document_metadata: DocumentMetadata
 
 
+class InsufficientEvidenceResponse(BaseModel):
+    answer: str = "Insufficient evidence found in the provided documents."
+    is_gate_blocked: bool = True
+    gate_reason: str
+    avg_confidence: float
+    chunk_count: int
+    suggestion: str = "Try uploading more relevant documents or rephrasing your question."
+
+
 class AskRequest(BaseModel):
     question: str = Field(min_length=3, max_length=1000)
     document_id: str
@@ -112,6 +121,10 @@ class AskResponse(BaseModel):
     evidence_quality: str = "none"
     avg_confidence: float = 0.0
     chunks_filtered_out: int = 0
+    hallucination_risk: float = 0.0
+    is_high_risk: bool = False
+    ungrounded_sentences: list[str] = []
+    gate_passed: bool = True
 
 
 class GlobalAskRequest(BaseModel):

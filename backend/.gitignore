@@ -12,3 +12,7 @@ wheels/
 # SQLite database
 data/*.db
 data/
+
+docs
+
+CLAUDE.md

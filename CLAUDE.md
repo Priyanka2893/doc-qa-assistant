@@ -210,3 +210,15 @@ Constrained generation and citation-backed responses implemented.
 
 **AskRequest new fields:** response_mode, temperature
 **AskResponse new fields:** cited_sources, unmapped_citations, is_abstention, citation_coverage
+
+### Feature F9 — COMPLETE ✅
+Two-layer hallucination guard implemented.
+
+**Layer 1 (pre-gen gate):** avg_confidence < PRE_GEN_CONFIDENCE_GATE (0.50) → block LLM call
+**Layer 2 (post-gen verifier):** Jaccard token overlap per sentence → hallucination_risk score
+**Action on high risk:** configurable "flag" or "block" (HALLUCINATION_ACTION setting)
+
+**New file:** backend/app/services/hallucination_guard.py
+**New table:** hallucination_events in SQLite
+**New endpoint:** GET /api/v1/hallucination/stats
+**AskResponse new fields:** hallucination_risk, is_high_risk, ungrounded_sentences, gate_passed

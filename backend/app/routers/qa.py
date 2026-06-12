@@ -2,7 +2,7 @@ import json
 
 import structlog
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from app import database
 from app.limiter import limiter
@@ -14,11 +14,18 @@ from app.models import (
     GlobalAskRequest,
     GlobalAskResponse,
     GlobalChunkSource,
+    InsufficientEvidenceResponse,
     ResponseMode,
 )
 from app.services.cache import get_semantic_cache
 from app.services.citation_parser import parse_citations
 from app.services.confidence_scorer import ScoredChunk, summarize_evidence_quality
+from app.services.hallucination_guard import (
+    GateResult,
+    log_hallucination_event,
+    pre_generation_gate,
+    verify_answer,
+)
 from app.services.llm import generate_answer, generate_answer_stream
 from app.services.prompt_builder import build_messages
 from app.services.retriever import retrieve, retrieve_global
@@ -94,6 +101,29 @@ async def ask_question(request: Request, body: AskRequest) -> AskResponse:
     results = output.chunks
     chunks_filtered_out = output.filtered_out
 
+    # Layer 1: Pre-generation gate
+    gate_result = pre_generation_gate(
+        results, settings.PRE_GEN_CONFIDENCE_GATE, settings.MIN_RAW_VECTOR_SCORE
+    )
+    if not gate_result.passed:
+        await log_hallucination_event(
+            request_id=req_id,
+            doc_id=body.document_id,
+            question=body.question,
+            hallucination_risk=0.0,
+            ungrounded_sentences=[],
+            action_taken="blocked",
+            gate_result=gate_result,
+        )
+        return JSONResponse(
+            status_code=422,
+            content=InsufficientEvidenceResponse(
+                gate_reason=gate_result.reason,
+                avg_confidence=gate_result.avg_confidence,
+                chunk_count=gate_result.chunk_count,
+            ).model_dump(),
+        )
+
     messages = build_messages(body.question, results, mode=body.response_mode)
     llm_result = await generate_answer(
         messages=messages,
@@ -105,6 +135,44 @@ async def ask_question(request: Request, body: AskRequest) -> AskResponse:
     citation_result = parse_citations(llm_result["answer"], results)
     cited_sources = _cited_sources_from_result(citation_result, results)
     evidence_quality = summarize_evidence_quality(results)
+
+    # Layer 2: Post-generation verifier
+    verification = verify_answer(
+        llm_result["answer"],
+        results,
+        settings.POST_GEN_OVERLAP_THRESHOLD,
+        settings.HIGH_RISK_THRESHOLD,
+    )
+
+    if verification.is_high_risk and settings.HALLUCINATION_ACTION == "block":
+        await log_hallucination_event(
+            request_id=req_id,
+            doc_id=body.document_id,
+            question=body.question,
+            hallucination_risk=verification.hallucination_risk,
+            ungrounded_sentences=verification.ungrounded_sentences,
+            action_taken="blocked",
+            gate_result=gate_result,
+        )
+        return JSONResponse(
+            status_code=422,
+            content=InsufficientEvidenceResponse(
+                gate_reason="high_hallucination_risk",
+                avg_confidence=gate_result.avg_confidence,
+                chunk_count=gate_result.chunk_count,
+            ).model_dump(),
+        )
+
+    action = "flagged" if verification.is_high_risk else "passed"
+    await log_hallucination_event(
+        request_id=req_id,
+        doc_id=body.document_id,
+        question=body.question,
+        hallucination_risk=verification.hallucination_risk,
+        ungrounded_sentences=verification.ungrounded_sentences,
+        action_taken=action,
+        gate_result=gate_result,
+    )
 
     await database.insert_citation_audit(
         request_id=req_id,
@@ -132,6 +200,10 @@ async def ask_question(request: Request, body: AskRequest) -> AskResponse:
         evidence_quality=evidence_quality,
         avg_confidence=_avg_confidence(results),
         chunks_filtered_out=chunks_filtered_out,
+        hallucination_risk=verification.hallucination_risk,
+        is_high_risk=verification.is_high_risk,
+        ungrounded_sentences=verification.ungrounded_sentences,
+        gate_passed=gate_result.passed,
     )
 
     await cache.cache_answer(body.question, body.document_id, response)
@@ -148,6 +220,9 @@ async def ask_question(request: Request, body: AskRequest) -> AskResponse:
         response_mode=body.response_mode,
         evidence_quality=evidence_quality,
         chunks_filtered_out=chunks_filtered_out,
+        hallucination_risk=verification.hallucination_risk,
+        is_high_risk=verification.is_high_risk,
+        hallucination_action=action,
         request_id=req_id,
     )
 
@@ -266,3 +341,9 @@ async def ask_question_global(request: Request, body: GlobalAskRequest) -> Globa
         model=llm_result["model"],
         tokens_used=llm_result["tokens_used"],
     )
+
+
+@router.get("/hallucination/stats")
+async def hallucination_stats() -> dict:
+    """Aggregated hallucination guard statistics."""
+    return await database.get_hallucination_stats()

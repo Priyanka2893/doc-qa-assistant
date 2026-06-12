@@ -31,6 +31,21 @@ CREATE TABLE IF NOT EXISTS documents (
 );
 """
 
+_CREATE_HALLUCINATION_EVENTS_SQL = """
+CREATE TABLE IF NOT EXISTS hallucination_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    request_id TEXT NOT NULL,
+    doc_id TEXT NOT NULL,
+    question TEXT NOT NULL,
+    gate_blocked INTEGER DEFAULT 0,
+    gate_avg_confidence REAL,
+    post_gen_risk REAL,
+    ungrounded_count INTEGER DEFAULT 0,
+    action_taken TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
+);
+"""
+
 _CREATE_CITATION_AUDIT_SQL = """
 CREATE TABLE IF NOT EXISTS citation_audit (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -67,6 +82,7 @@ async def init_db() -> None:
     async with aiosqlite.connect(_DB_PATH) as db:
         await db.execute(_CREATE_TABLE_SQL)
         await db.execute(_CREATE_CITATION_AUDIT_SQL)
+        await db.execute(_CREATE_HALLUCINATION_EVENTS_SQL)
         for col_sql in _MIGRATIONS:
             try:
                 await db.execute(col_sql)
@@ -211,6 +227,65 @@ async def get_document_trust(doc_id: str) -> str:
         )
         row = await cursor.fetchone()
         return row["document_trust"] if row else "unknown"
+
+
+async def insert_hallucination_event(
+    request_id: str,
+    doc_id: str,
+    question: str,
+    gate_blocked: int,
+    gate_avg_confidence: float,
+    post_gen_risk: float,
+    ungrounded_count: int,
+    action_taken: str,
+) -> None:
+    async with get_db() as db:
+        await db.execute(
+            """
+            INSERT INTO hallucination_events
+                (request_id, doc_id, question, gate_blocked,
+                 gate_avg_confidence, post_gen_risk, ungrounded_count, action_taken)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (request_id, doc_id, question, gate_blocked,
+             gate_avg_confidence, post_gen_risk, ungrounded_count, action_taken),
+        )
+        await db.commit()
+
+
+async def get_hallucination_stats() -> dict:
+    async with get_db() as db:
+        cursor = await db.execute(
+            """
+            SELECT
+                COUNT(*) AS total_queries,
+                SUM(gate_blocked) AS gate_blocked_count,
+                SUM(CASE WHEN action_taken = 'flagged' THEN 1 ELSE 0 END) AS high_risk_count,
+                AVG(post_gen_risk) AS avg_hallucination_risk
+            FROM hallucination_events
+            """
+        )
+        row = await cursor.fetchone()
+        stats = dict(row) if row else {}
+
+        cursor2 = await db.execute(
+            """
+            SELECT id, request_id, doc_id, question, gate_blocked, gate_avg_confidence,
+                   post_gen_risk, ungrounded_count, action_taken, created_at
+            FROM hallucination_events
+            ORDER BY created_at DESC
+            LIMIT 10
+            """
+        )
+        recent = [dict(r) for r in await cursor2.fetchall()]
+
+    return {
+        "total_queries": stats.get("total_queries") or 0,
+        "gate_blocked_count": stats.get("gate_blocked_count") or 0,
+        "high_risk_count": stats.get("high_risk_count") or 0,
+        "avg_hallucination_risk": round(stats.get("avg_hallucination_risk") or 0.0, 4),
+        "recent_events": recent,
+    }
 
 
 async def insert_citation_audit(
