@@ -17,6 +17,7 @@ type State =
   | { phase: "selected"; file: File }
   | { phase: "uploading"; file: File; pct: number }
   | { phase: "success"; result: UploadResponse }
+  | { phase: "duplicate"; existingFilename: string; existingDocId: string }
   | { phase: "error"; message: string };
 
 function formatBytes(b: number) {
@@ -31,8 +32,8 @@ export default function FileUpload({ onUploadSuccess, onUploadError }: Props) {
   const inputRef = useRef<HTMLInputElement>(null);
 
   function pickFile(file: File) {
-    if (!file.name.match(/\.(pdf|txt)$/i)) {
-      setState({ phase: "error", message: "Only PDF and TXT files are supported." });
+    if (!file.name.match(/\.(pdf|txt|docx|html|htm|png|jpg|jpeg|tiff)$/i)) {
+      setState({ phase: "error", message: "Unsupported file type. Allowed: PDF, TXT, DOCX, HTML, PNG, JPG, TIFF." });
       return;
     }
     if (file.size > MAX_BYTES) {
@@ -74,10 +75,10 @@ export default function FileUpload({ onUploadSuccess, onUploadError }: Props) {
         content_hash: null,
       });
     } catch (err) {
-      if (err instanceof DuplicateDocumentError && onUploadError) {
-        setState({ phase: "idle" });
+      if (err instanceof DuplicateDocumentError) {
+        setState({ phase: "duplicate", existingFilename: err.existing_filename, existingDocId: err.existing_doc_id });
         if (inputRef.current) inputRef.current.value = "";
-        onUploadError(err);
+        if (onUploadError) onUploadError(err);
       } else {
         setState({ phase: "error", message: err instanceof Error ? err.message : "Upload failed" });
         if (onUploadError) onUploadError(err);
@@ -111,7 +112,7 @@ export default function FileUpload({ onUploadSuccess, onUploadError }: Props) {
         <input
           ref={inputRef}
           type="file"
-          accept=".pdf,.txt"
+          accept=".pdf,.txt,.docx,.html,.htm,.png,.jpg,.jpeg,.tiff"
           className="sr-only"
           onChange={onInputChange}
         />
@@ -122,7 +123,7 @@ export default function FileUpload({ onUploadSuccess, onUploadError }: Props) {
             <p className="text-sm text-[var(--text-muted)]">
               Drag & drop or <span className="text-[var(--accent-blue)] underline-offset-2 hover:underline">browse</span>
             </p>
-            <p className="text-xs text-[var(--text-subtle)]">PDF or TXT · Max 50 MB</p>
+            <p className="text-xs text-[var(--text-subtle)]">PDF, TXT, DOCX, HTML, PNG, JPG, TIFF · Max 50 MB</p>
           </>
         )}
 
@@ -166,6 +167,16 @@ export default function FileUpload({ onUploadSuccess, onUploadError }: Props) {
           </>
         )}
 
+        {state.phase === "duplicate" && (
+          <>
+            <AlertCircle className="h-7 w-7 text-amber-400" />
+            <p className="text-center text-sm font-medium text-amber-400">Already uploaded</p>
+            <p className="text-center text-xs text-[var(--text-muted)]">
+              &ldquo;{state.existingFilename}&rdquo; already exists in your library.
+            </p>
+          </>
+        )}
+
         {state.phase === "error" && (
           <>
             <AlertCircle className="h-7 w-7 text-red-500" />
@@ -190,7 +201,7 @@ export default function FileUpload({ onUploadSuccess, onUploadError }: Props) {
             </Button>
           </>
         )}
-        {(state.phase === "success" || state.phase === "error") && (
+        {(state.phase === "success" || state.phase === "error" || state.phase === "duplicate") && (
           <Button
             onClick={reset}
             size="sm"
