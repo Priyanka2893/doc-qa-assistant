@@ -6,6 +6,9 @@ import structlog
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from opentelemetry import trace
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from qdrant_client import AsyncQdrantClient
 from slowapi.errors import RateLimitExceeded
 
@@ -18,12 +21,23 @@ from app.routers import documents, eval, health, qa
 from app.services.bm25_store import rebuild_indexes_from_qdrant
 from app.services.embedder import get_embedder
 from app.services.vector_store import init_collection
+from app.telemetry import CHUNKS_TOTAL, DOCUMENTS_TOTAL  # noqa: F401 — side-effect: registers metrics
+
+
+def _inject_trace_id(_logger, _method_name, event_dict):
+    span = trace.get_current_span()
+    ctx = span.get_span_context()
+    if ctx.is_valid:
+        event_dict["trace_id"] = format(ctx.trace_id, "032x")
+    return event_dict
+
 
 structlog.configure(
     wrapper_class=structlog.make_filtering_bound_logger(20),  # INFO
     processors=[
         structlog.processors.TimeStamper(fmt="iso"),
         structlog.processors.add_log_level,
+        _inject_trace_id,
         structlog.processors.StackInfoRenderer(),
         structlog.dev.ConsoleRenderer(),
     ],
@@ -52,6 +66,8 @@ async def lifespan(app: FastAPI):
     get_embedder(settings.EMBEDDING_MODEL)
 
     await rebuild_indexes_from_qdrant(qdrant_client, settings.QDRANT_COLLECTION_NAME)
+
+    FastAPIInstrumentor.instrument_app(app)
 
     app.state.is_ready = True
     logger.info(
@@ -103,3 +119,9 @@ app.include_router(health.router, prefix="/api/v1", tags=["health"])
 app.include_router(documents.router, prefix="/api/v1", tags=["documents"])
 app.include_router(qa.router, prefix="/api/v1", tags=["qa"])
 app.include_router(eval.router, prefix="/api/v1", tags=["eval"])
+
+
+@app.get("/metrics", include_in_schema=False)
+async def prometheus_metrics() -> Response:
+    """Prometheus scrape endpoint — exposes all registered metrics."""
+    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)

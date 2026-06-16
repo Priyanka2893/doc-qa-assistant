@@ -7,6 +7,7 @@ import structlog
 from app.models import EvalMetrics
 from app.services.confidence_scorer import ScoredChunk
 from app.services.hallucination_guard import VerificationResult
+from app.telemetry import ANSWER_RELEVANCE_GAUGE, CONTEXT_RELEVANCE_GAUGE, FAITHFULNESS_GAUGE, HALLUCINATION_RATE_GAUGE, traced
 
 logger = structlog.get_logger(__name__)
 
@@ -52,6 +53,7 @@ def compute_faithfulness(verification_result: VerificationResult, is_abstention:
     return round(1.0 - verification_result.hallucination_risk, 4)
 
 
+@traced("evaluate_response")
 async def evaluate_response(
     question: str,
     chunks: list[ScoredChunk],
@@ -147,6 +149,11 @@ async def evaluate_response(
         semantic_chunks=len(needs_sem_chunks),
         semantic_ans=needs_sem_ans,
     )
+
+    FAITHFULNESS_GAUGE.set(faith)
+    CONTEXT_RELEVANCE_GAUGE.set(ctx)
+    ANSWER_RELEVANCE_GAUGE.set(ans_rel)
+    HALLUCINATION_RATE_GAUGE.set(verification_result.hallucination_risk)
 
     return EvalMetrics(
         context_relevance=ctx,

@@ -16,6 +16,7 @@ from app.services.deduplicator import DedupResult, deduplicate_exact, deduplicat
 from app.services.embedder import async_encode_texts, get_embedder
 from app.services.parser import SUPPORTED_EXTENSIONS, parse_and_chunk
 from app.services.vector_store import delete_document_chunks, upsert_chunks
+from app.telemetry import CHUNKS_DEDUPED, CHUNKS_TOTAL, DOCUMENTS_TOTAL, INGESTION_TOTAL
 
 logger = structlog.get_logger(__name__)
 router = APIRouter()
@@ -109,13 +110,24 @@ async def upload_document(request: Request, file: UploadFile) -> UploadResponse:
         )
     except HTTPException:
         await database.update_document_status(doc_id, "error")
+        INGESTION_TOTAL.labels(file_format=ext.lstrip(".") or "unknown", status="error").inc()
         raise
     except Exception as exc:
         await database.update_document_status(doc_id, "error")
+        INGESTION_TOTAL.labels(file_format=ext.lstrip(".") or "unknown", status="error").inc()
         logger.error("documents.upload_failed", doc_id=doc_id, error=str(exc))
         raise HTTPException(status_code=500, detail="Document ingestion failed.")
 
     ingestion_ms = int((time.perf_counter() - t_start) * 1000)
+
+    INGESTION_TOTAL.labels(file_format=parse_result.metadata.file_format or "unknown", status="success").inc()
+    CHUNKS_DEDUPED.labels(dedup_type="exact").inc(exact_removed)
+    CHUNKS_DEDUPED.labels(dedup_type="semantic").inc(semantic_removed)
+
+    docs_all = await database.list_documents()
+    DOCUMENTS_TOTAL.set(len(docs_all))
+    CHUNKS_TOTAL.set(sum(d.get("chunk_count", 0) for d in docs_all))
+
     logger.info(
         "documents.uploaded",
         doc_id=doc_id,
@@ -190,5 +202,10 @@ async def delete_document(doc_id: str, request: Request) -> dict:
     get_bm25_store().remove_document(doc_id)
     await database.delete_document(doc_id)
     await get_semantic_cache().invalidate_document(doc_id)
+
+    docs_all = await database.list_documents()
+    DOCUMENTS_TOTAL.set(len(docs_all))
+    CHUNKS_TOTAL.set(sum(d.get("chunk_count", 0) for d in docs_all))
+
     logger.info("documents.deleted", doc_id=doc_id)
     return {"status": "deleted", "doc_id": doc_id}

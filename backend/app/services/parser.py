@@ -9,6 +9,8 @@ import structlog
 from fastapi import HTTPException
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
+from app.telemetry import track_stage
+
 logger = structlog.get_logger(__name__)
 
 # ─── Data classes ─────────────────────────────────────────────────────────────
@@ -247,8 +249,9 @@ def parse_and_chunk(
     validate_file_type(content, filename)
 
     parser_fn = SUPPORTED_EXTENSIONS[ext]
-    raw_result: RawParseResult = parser_fn(content)  # type: ignore[operator]
-    cleaned_text = normalize_text(raw_result.text)
+    with track_stage("parse"):
+        raw_result: RawParseResult = parser_fn(content)  # type: ignore[operator]
+        cleaned_text = normalize_text(raw_result.text)
 
     if not cleaned_text.strip():
         raise HTTPException(status_code=422, detail="File is empty or could not be parsed")
@@ -262,7 +265,8 @@ def parse_and_chunk(
 
     raw_result.metadata.word_count = len(cleaned_text.split())
 
-    chunks = chunk_text(cleaned_text, chunk_size, chunk_overlap)
+    with track_stage("chunk"):
+        chunks = chunk_text(cleaned_text, chunk_size, chunk_overlap)
     logger.info(
         "parser.chunked",
         filename=filename,

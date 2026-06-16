@@ -3,6 +3,8 @@ from __future__ import annotations
 import structlog
 from cachetools import TTLCache
 
+from app.telemetry import CACHE_HITS, CACHE_MISSES
+
 logger = structlog.get_logger(__name__)
 
 _cache: TTLCache = TTLCache(maxsize=500, ttl=3600)
@@ -18,6 +20,7 @@ class SemanticCache:
         result = _cache.get(key)
         if result is not None:
             _hits += 1
+            CACHE_HITS.labels(cache_type="semantic").inc()
             logger.info(
                 "cache_hit",
                 doc_id=doc_id,
@@ -25,6 +28,7 @@ class SemanticCache:
             )
             return result
         _misses += 1
+        CACHE_MISSES.inc()
         return None
 
     async def cache_answer(self, question: str, doc_id: str, response) -> None:

@@ -5,6 +5,8 @@ import structlog
 from fastapi import HTTPException
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
+from app.telemetry import ERRORS_TOTAL, TRACER, track_stage
+
 logger = structlog.get_logger(__name__)
 
 
@@ -44,20 +46,34 @@ async def generate_answer(
 
     Returns a dict with keys: answer, tokens_used, model.
     """
-    client = groq.AsyncGroq(api_key=api_key)
-    try:
-        response = await _call_groq_with_retry(client, model, messages, temperature)
-    except groq.RateLimitError as exc:
-        logger.warning("llm.rate_limit", error=str(exc))
-        raise HTTPException(status_code=429, detail="LLM rate limit exceeded. Please retry shortly.")
-    except groq.APIError as exc:
-        logger.error("llm.api_error", error=str(exc))
-        raise HTTPException(status_code=502, detail="LLM API error. Please try again later.")
+    from opentelemetry import trace as otel_trace
 
-    answer = response.choices[0].message.content or ""
-    tokens_used = response.usage.total_tokens if response.usage else 0
-    logger.info("llm.generated", model=model, tokens_used=tokens_used)
-    return {"answer": answer, "tokens_used": tokens_used, "model": model}
+    client = groq.AsyncGroq(api_key=api_key)
+    query_len = len(messages[-1].get("content", "")) if messages else 0
+
+    with TRACER.start_as_current_span("generate_answer") as span:
+        span.set_attribute("llm.model", model)
+        span.set_attribute("query.length", query_len)
+        try:
+            with track_stage("llm_generation"):
+                response = await _call_groq_with_retry(client, model, messages, temperature)
+        except groq.RateLimitError as exc:
+            ERRORS_TOTAL.labels(error_type="llm_rate_limit").inc()
+            span.set_status(otel_trace.StatusCode.ERROR, str(exc))
+            logger.warning("llm.rate_limit", error=str(exc))
+            raise HTTPException(status_code=429, detail="LLM rate limit exceeded. Please retry shortly.")
+        except groq.APIError as exc:
+            ERRORS_TOTAL.labels(error_type="llm_api_error").inc()
+            span.set_status(otel_trace.StatusCode.ERROR, str(exc))
+            logger.error("llm.api_error", error=str(exc))
+            raise HTTPException(status_code=502, detail="LLM API error. Please try again later.")
+
+        answer = response.choices[0].message.content or ""
+        tokens_used = response.usage.total_tokens if response.usage else 0
+        span.set_attribute("llm.tokens_used", tokens_used)
+        span.set_status(otel_trace.StatusCode.OK)
+        logger.info("llm.generated", model=model, tokens_used=tokens_used)
+        return {"answer": answer, "tokens_used": tokens_used, "model": model}
 
 
 async def generate_answer_stream(

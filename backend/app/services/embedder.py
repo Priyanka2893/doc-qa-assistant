@@ -5,6 +5,8 @@ from functools import lru_cache
 import structlog
 from sentence_transformers import SentenceTransformer
 
+from app.telemetry import track_stage
+
 logger = structlog.get_logger(__name__)
 
 
@@ -51,11 +53,13 @@ async def async_encode_texts(model_name: str, texts: list[str]) -> list[list[flo
     """Run encode_texts in a thread executor to keep the event loop unblocked."""
     loop = asyncio.get_event_loop()
     embedder = get_embedder(model_name)
-    return await loop.run_in_executor(None, embedder.encode_texts, texts)
+    with track_stage("embed"):
+        return await loop.run_in_executor(None, embedder.encode_texts, texts)
 
 
 async def async_encode_query(model_name: str, query: str) -> list[float]:
     """Run encode_query in a thread executor to keep the event loop unblocked."""
     loop = asyncio.get_event_loop()
     embedder = get_embedder(model_name)
-    return await loop.run_in_executor(None, embedder.encode_query, query)
+    with track_stage("embed"):
+        return await loop.run_in_executor(None, embedder.encode_query, query)

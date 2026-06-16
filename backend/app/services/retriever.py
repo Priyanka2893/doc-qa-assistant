@@ -13,6 +13,7 @@ from app.services.bm25_store import get_bm25_store
 from app.services.confidence_scorer import ScoredChunk, score_chunks
 from app.services.embedder import async_encode_query
 from app.services.vector_store import search_chunks, search_chunks_global
+from app.telemetry import track_stage, traced
 
 logger = structlog.get_logger(__name__)
 
@@ -128,6 +129,7 @@ async def _build_doc_maps(
     return uploaded_at_map, authority_map
 
 
+@traced("retrieve")
 async def retrieve(
     question: str,
     doc_id: str,
@@ -148,13 +150,14 @@ async def retrieve(
 
     if mode in (SearchMode.VECTOR, SearchMode.HYBRID):
         query_vector = await async_encode_query(embedding_model, question)
-        scored_points = await search_chunks(
-            client=qdrant_client,
-            collection_name=collection_name,
-            query_vector=query_vector,
-            doc_id=doc_id,
-            top_k=candidate_k,
-        )
+        with track_stage("vector_search"):
+            scored_points = await search_chunks(
+                client=qdrant_client,
+                collection_name=collection_name,
+                query_vector=query_vector,
+                doc_id=doc_id,
+                top_k=candidate_k,
+            )
         vector_results = [(str(p.id), p.score) for p in scored_points]
         for p in scored_points:
             candidates[str(p.id)] = RetrievalResult(
@@ -170,26 +173,30 @@ async def retrieve(
             )
 
     if mode in (SearchMode.KEYWORD, SearchMode.HYBRID):
-        bm25_results = bm25_store.search(doc_id=doc_id, query=question, top_k=candidate_k)
+        with track_stage("bm25_search"):
+            bm25_results = bm25_store.search(doc_id=doc_id, query=question, top_k=candidate_k)
         _apply_bm25_to_candidates(bm25_results, candidates, doc_id, bm25_store)
 
-    final_candidates, after_rrf = _select_final(candidates, vector_results, bm25_results, mode, top_k)
+    with track_stage("rrf_fusion"):
+        final_candidates, after_rrf = _select_final(candidates, vector_results, bm25_results, mode, top_k)
 
     if rerank and final_candidates:
-        final_candidates = await _rerank(question, final_candidates)
+        with track_stage("rerank"):
+            final_candidates = await _rerank(question, final_candidates)
 
     final_candidates = final_candidates[:top_k]
     pre_filter_count = len(final_candidates)
 
     uploaded_at_map, authority_map = await _build_doc_maps(final_candidates)
-    scored = await score_chunks(
-        chunks=final_candidates,
-        uploaded_at_map=uploaded_at_map,
-        authority_map=authority_map,
-        min_confidence=min_confidence,
-        embedding_model=embedding_model,
-        weights=confidence_weights,
-    )
+    with track_stage("confidence_score"):
+        scored = await score_chunks(
+            chunks=final_candidates,
+            uploaded_at_map=uploaded_at_map,
+            authority_map=authority_map,
+            min_confidence=min_confidence,
+            embedding_model=embedding_model,
+            weights=confidence_weights,
+        )
 
     logger.info(
         "retriever.done",
@@ -205,6 +212,7 @@ async def retrieve(
     return RetrieveOutput(chunks=scored, filtered_out=pre_filter_count - len(scored))
 
 
+@traced("retrieve_global")
 async def retrieve_global(
     question: str,
     top_k: int = 10,
@@ -224,12 +232,13 @@ async def retrieve_global(
 
     if mode in (SearchMode.VECTOR, SearchMode.HYBRID):
         query_vector = await async_encode_query(embedding_model, question)
-        scored_points = await search_chunks_global(
-            client=qdrant_client,
-            collection_name=collection_name,
-            query_vector=query_vector,
-            top_k=candidate_k,
-        )
+        with track_stage("vector_search"):
+            scored_points = await search_chunks_global(
+                client=qdrant_client,
+                collection_name=collection_name,
+                query_vector=query_vector,
+                top_k=candidate_k,
+            )
         vector_results = [(str(p.id), p.score) for p in scored_points]
         for p in scored_points:
             candidates[str(p.id)] = RetrievalResult(
@@ -245,26 +254,30 @@ async def retrieve_global(
             )
 
     if mode in (SearchMode.KEYWORD, SearchMode.HYBRID):
-        bm25_results = bm25_store.search_all(query=question, top_k=candidate_k)
+        with track_stage("bm25_search"):
+            bm25_results = bm25_store.search_all(query=question, top_k=candidate_k)
         _apply_bm25_to_candidates(bm25_results, candidates, "", bm25_store)
 
-    final_candidates, after_rrf = _select_final(candidates, vector_results, bm25_results, mode, top_k)
+    with track_stage("rrf_fusion"):
+        final_candidates, after_rrf = _select_final(candidates, vector_results, bm25_results, mode, top_k)
 
     if rerank and final_candidates:
-        final_candidates = await _rerank(question, final_candidates)
+        with track_stage("rerank"):
+            final_candidates = await _rerank(question, final_candidates)
 
     final_candidates = final_candidates[:top_k]
     pre_filter_count = len(final_candidates)
 
     uploaded_at_map, authority_map = await _build_doc_maps(final_candidates)
-    scored = await score_chunks(
-        chunks=final_candidates,
-        uploaded_at_map=uploaded_at_map,
-        authority_map=authority_map,
-        min_confidence=min_confidence,
-        embedding_model=embedding_model,
-        weights=confidence_weights,
-    )
+    with track_stage("confidence_score"):
+        scored = await score_chunks(
+            chunks=final_candidates,
+            uploaded_at_map=uploaded_at_map,
+            authority_map=authority_map,
+            min_confidence=min_confidence,
+            embedding_model=embedding_model,
+            weights=confidence_weights,
+        )
 
     logger.info(
         "retriever.done_global",

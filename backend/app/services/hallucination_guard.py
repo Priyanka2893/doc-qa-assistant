@@ -6,6 +6,7 @@ import numpy as np
 import structlog
 
 from app.services.confidence_scorer import ScoredChunk
+from app.telemetry import ERRORS_TOTAL, track_stage, traced
 
 logger = structlog.get_logger(__name__)
 
@@ -61,12 +62,14 @@ def pre_generation_gate(
     2. Composite confidence average — catches weak evidence after scoring.
     """
     if not scored_chunks:
+        ERRORS_TOTAL.labels(error_type="gate_blocked").inc()
         return GateResult(passed=False, reason="no_chunks_retrieved", avg_confidence=0.0, chunk_count=0)
 
     raw_scores = [c.vector_score for c in scored_chunks if c.vector_score is not None]
     if raw_scores:
         avg_raw = sum(raw_scores) / len(raw_scores)
         if avg_raw < min_raw_vector_score:
+            ERRORS_TOTAL.labels(error_type="gate_blocked").inc()
             return GateResult(
                 passed=False,
                 reason=f"avg_raw_vector_score_{avg_raw:.2f}_below_threshold_{min_raw_vector_score}",
@@ -76,6 +79,7 @@ def pre_generation_gate(
 
     avg = sum(c.confidence.composite_score for c in scored_chunks) / len(scored_chunks)
     if avg < min_confidence:
+        ERRORS_TOTAL.labels(error_type="gate_blocked").inc()
         return GateResult(
             passed=False,
             reason=f"avg_confidence_{avg:.2f}_below_threshold_{min_confidence}",
@@ -111,6 +115,7 @@ def _max_cosine(sentence_vec: np.ndarray, chunk_matrix: np.ndarray) -> tuple[flo
     return float(sims[idx]), idx
 
 
+@traced("verify_answer")
 async def verify_answer(
     answer: str,
     chunks: list[ScoredChunk],
@@ -170,7 +175,8 @@ async def verify_answer(
 
         texts = [cleaned[i] for i in needs_semantic] + [c.text for c in chunks]
         loop = asyncio.get_event_loop()
-        vecs = await loop.run_in_executor(None, embedder.encode_texts, texts)
+        with track_stage("hallucination_verify"):
+            vecs = await loop.run_in_executor(None, embedder.encode_texts, texts)
         arr = np.array(vecs, dtype=np.float32)
 
         n_sent = len(needs_semantic)
