@@ -39,6 +39,9 @@ class Settings(BaseSettings):
         "agreement": 0.10,
     }
 
+    # Semantic cache
+    CACHE_SEMANTIC_THRESHOLD: float = 0.82  # lower (e.g. 0.75) to catch looser paraphrases
+
     # Hallucination guard
     PRE_GEN_CONFIDENCE_GATE: float = 0.50
     POST_GEN_TOKEN_FAST_PATH: float = 0.60   # token containment floor → grounded without embedding

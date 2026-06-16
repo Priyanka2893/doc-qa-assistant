@@ -105,6 +105,7 @@ class AskRequest(BaseModel):
     rerank: bool = True
     response_mode: ResponseMode = ResponseMode.CITED
     temperature: float = Field(default=0.1, ge=0.0, le=1.0)
+    session_id: str | None = None
 
 
 class AskResponse(BaseModel):
@@ -118,6 +119,9 @@ class AskResponse(BaseModel):
     tokens_used: int
     doc_id: str
     cache_hit: bool = False
+    cache_hit_type: str | None = None   # "exact" | "semantic" | None
+    session_id: str | None = None
+    is_correction: bool = False
     evidence_quality: str = "none"
     avg_confidence: float = 0.0
     chunks_filtered_out: int = 0

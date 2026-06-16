@@ -1,3 +1,4 @@
+import asyncio
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -17,9 +18,10 @@ from app.database import init_db
 from app.limiter import limiter
 from app.middleware.logging import RequestLoggingMiddleware
 from app.middleware.request_id import RequestIDMiddleware
-from app.routers import documents, eval, health, qa
+from app.routers import documents, eval, health, qa, sessions
 from app.services.bm25_store import rebuild_indexes_from_qdrant
 from app.services.embedder import get_embedder
+from app.services.session_memory import get_session_memory
 from app.services.vector_store import init_collection
 from app.telemetry import CHUNKS_TOTAL, DOCUMENTS_TOTAL  # noqa: F401 — side-effect: registers metrics
 
@@ -46,6 +48,15 @@ structlog.configure(
 logger = structlog.get_logger(__name__)
 
 
+async def _session_cleanup_task() -> None:
+    """Remove expired sessions every 5 minutes."""
+    while True:
+        await asyncio.sleep(300)
+        removed = get_session_memory().cleanup_expired()
+        if removed:
+            logger.info("session.background_cleanup", removed=removed)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
@@ -69,6 +80,8 @@ async def lifespan(app: FastAPI):
 
     FastAPIInstrumentor.instrument_app(app)
 
+    cleanup_task = asyncio.create_task(_session_cleanup_task())
+
     app.state.is_ready = True
     logger.info(
         "app.started",
@@ -79,6 +92,7 @@ async def lifespan(app: FastAPI):
 
     yield
 
+    cleanup_task.cancel()
     app.state.is_ready = False
     await qdrant_client.close()
     logger.info("app.shutdown")
@@ -119,6 +133,7 @@ app.include_router(health.router, prefix="/api/v1", tags=["health"])
 app.include_router(documents.router, prefix="/api/v1", tags=["documents"])
 app.include_router(qa.router, prefix="/api/v1", tags=["qa"])
 app.include_router(eval.router, prefix="/api/v1", tags=["eval"])
+app.include_router(sessions.router, prefix="/api/v1", tags=["sessions"])
 
 
 @app.get("/metrics", include_in_schema=False)

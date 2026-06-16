@@ -55,15 +55,16 @@ async def test_cache_hit_counter(obs_client):
     assert "rag_cache_hits_total" in response.text
     assert "rag_cache_misses_total" in response.text
 
-    # Trigger a cache miss by calling get_cached_answer, then verify the counter increments
+    # Trigger a cache miss by calling get(), then verify the counter increments
     from app.services.cache import get_semantic_cache
 
     cache = get_semantic_cache()
     before_text = response.text
 
     # Simulate a miss — no prior entry exists
-    result = await cache.get_cached_answer("what is observability?", "doc-test-obs")
-    assert result is None
+    entry, hit_type = await cache.get("doc-test-obs", "what is observability?", [])
+    assert entry is None
+    assert hit_type == "miss"
 
     metrics_after = await obs_client.get("/metrics")
     # The miss counter should have incremented (new label combination or existing)

@@ -20,6 +20,8 @@ from app.models import (
 from app.services.cache import get_semantic_cache
 from app.services.citation_parser import parse_citations
 from app.services.confidence_scorer import ScoredChunk, summarize_evidence_quality
+from app.services.corrections import get_correction_store
+from app.services.embedder import async_encode_query
 from app.services.evaluator import evaluate_response
 from app.services.hallucination_guard import (
     GateResult,
@@ -30,6 +32,7 @@ from app.services.hallucination_guard import (
 from app.services.llm import generate_answer, generate_answer_stream
 from app.services.prompt_builder import build_messages
 from app.services.retriever import retrieve, retrieve_global
+from app.services.session_memory import get_session_memory
 
 logger = structlog.get_logger(__name__)
 router = APIRouter()
@@ -77,18 +80,58 @@ async def ask_question(request: Request, body: AskRequest) -> AskResponse:
     settings = request.app.state.settings
     qdrant_client = request.app.state.qdrant_client
     cache = get_semantic_cache()
+    corrections = get_correction_store()
+    session_memory = get_session_memory()
     req_id = request_id_var.get("")
 
     doc = await database.get_document(body.document_id)
     if not doc:
         raise HTTPException(status_code=404, detail=f"Document '{body.document_id}' not found.")
 
-    cached = await cache.get_cached_answer(body.question, body.document_id)
-    if cached is not None:
-        return cached.model_copy(update={"cache_hit": True})
+    # Step 1: embed question upfront (reused for cache lookup and semantic correction matching)
+    question_embedding = await async_encode_query(settings.EMBEDDING_MODEL, body.question)
+
+    # Step 2: check expert corrections first
+    from app.services.embedder import get_embedder
+    embedder = get_embedder(settings.EMBEDDING_MODEL)
+    correction = await corrections.find_correction(
+        question=body.question,
+        doc_id=body.document_id,
+        embedder=embedder,
+    )
+    if correction is not None:
+        return AskResponse(
+            answer=correction.corrected_answer,
+            cited_sources=[],
+            model="correction",
+            tokens_used=0,
+            doc_id=body.document_id,
+            cache_hit=False,
+            cache_hit_type=None,
+            session_id=body.session_id,
+            is_correction=True,
+        )
+
+    # Step 3: semantic + exact cache check
+    cache_entry, hit_type = await cache.get(body.document_id, body.question, question_embedding)
+    if cache_entry is not None:
+        return cache_entry.response.model_copy(
+            update={
+                "cache_hit": True,
+                "cache_hit_type": hit_type,
+                "session_id": body.session_id,
+            }
+        )
+
+    # Step 4: inject session context into question for retrieval + LLM
+    enriched_question = body.question
+    if body.session_id:
+        context_prefix = session_memory.get_context_for_query(body.session_id)
+        if context_prefix:
+            enriched_question = context_prefix + "\n\n" + body.question
 
     output = await retrieve(
-        question=body.question,
+        question=enriched_question,
         doc_id=body.document_id,
         top_k=body.top_k,
         mode=body.search_mode,
@@ -125,7 +168,7 @@ async def ask_question(request: Request, body: AskRequest) -> AskResponse:
             ).model_dump(),
         )
 
-    messages = build_messages(body.question, results, mode=body.response_mode)
+    messages = build_messages(enriched_question, results, mode=body.response_mode)
     llm_result = await generate_answer(
         messages=messages,
         model=settings.GROQ_MODEL,
@@ -219,6 +262,9 @@ async def ask_question(request: Request, body: AskRequest) -> AskResponse:
         tokens_used=llm_result["tokens_used"],
         doc_id=body.document_id,
         cache_hit=False,
+        cache_hit_type=None,
+        session_id=body.session_id,
+        is_correction=False,
         evidence_quality=evidence_quality,
         avg_confidence=_avg_confidence(results),
         chunks_filtered_out=chunks_filtered_out,
@@ -229,7 +275,18 @@ async def ask_question(request: Request, body: AskRequest) -> AskResponse:
         eval_metrics=eval_metrics,
     )
 
-    await cache.cache_answer(body.question, body.document_id, response)
+    # Step 6: store in cache (keyed by original question, not enriched)
+    await cache.set(body.document_id, body.question, question_embedding, response)
+
+    # Step 7: update session turn
+    if body.session_id:
+        session_memory.add_turn(
+            session_id=body.session_id,
+            question=body.question,
+            answer=llm_result["answer"],
+            doc_id=body.document_id,
+            cited_sources=cited_sources,
+        )
 
     logger.info(
         "qa.answered",
@@ -246,6 +303,7 @@ async def ask_question(request: Request, body: AskRequest) -> AskResponse:
         hallucination_risk=verification.hallucination_risk,
         is_high_risk=verification.is_high_risk,
         hallucination_action=action,
+        session_id=body.session_id,
         request_id=req_id,
     )
 
@@ -264,8 +322,15 @@ async def ask_question_stream(request: Request, body: AskRequest) -> StreamingRe
     if not doc:
         raise HTTPException(status_code=404, detail=f"Document '{body.document_id}' not found.")
 
+    enriched_question = body.question
+    if body.session_id:
+        session_memory = get_session_memory()
+        context_prefix = session_memory.get_context_for_query(body.session_id)
+        if context_prefix:
+            enriched_question = context_prefix + "\n\n" + body.question
+
     output = await retrieve(
-        question=body.question,
+        question=enriched_question,
         doc_id=body.document_id,
         top_k=body.top_k,
         mode=body.search_mode,
@@ -278,7 +343,7 @@ async def ask_question_stream(request: Request, body: AskRequest) -> StreamingRe
     )
     results = output.chunks
 
-    messages = build_messages(body.question, results, mode=body.response_mode)
+    messages = build_messages(enriched_question, results, mode=body.response_mode)
     doc_id = body.document_id
 
     async def event_generator():

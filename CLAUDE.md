@@ -269,4 +269,24 @@ Full observability stack implemented.
 **New files:** backend/app/telemetry.py, monitoring/prometheus.yml, monitoring/grafana/provisioning/...
 **Docker services added:** rag_prometheus (9090), rag_grafana (3001)
 
+cat >> ~/projects/doc-qa-assistant/CLAUDE.md << 'EOF'
 
+### Feature F12 — COMPLETE ✅
+Semantic cache and session memory implemented.
+
+**Cache:** Exact (SHA256) + Semantic (cosine > 0.97), 500-entry TTL cache, invalidated on doc delete
+**Session memory:** Multi-turn conversations with 30-min expiry, context injected into retrieval
+**Corrections:** Expert corrections override cache and retrieval for similar questions
+
+**New files:**
+- backend/app/services/session_memory.py
+- backend/app/services/corrections.py
+
+**Updated:** backend/app/services/cache.py (full semantic cache upgrade)
+**New endpoints:** POST /sessions, GET /sessions/{id}, POST /corrections, GET /cache/stats
+
+**AskRequest new field:** session_id
+**AskResponse new fields:** cache_hit, cache_hit_type, session_id, is_correction
+
+### 🎉 ALL FEATURES COMPLETE — Production-Grade RAG System
+EOF
