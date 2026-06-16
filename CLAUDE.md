@@ -257,3 +257,16 @@ Continuous evaluation pipeline implemented.
 **AskResponse new field:** eval_metrics (EvalMetrics | None) — computed after every successful query
 **CLI usage:** uv run python -m app.eval_runner --doc_id=... --questions_file=... [--base_url=...]
 **CI exit code:** 0 if avg_overall >= 0.70, else 1
+
+### Feature F11 — COMPLETE ✅
+Full observability stack implemented.
+
+**Tracing:** OpenTelemetry spans on every pipeline stage
+**Metrics:** Prometheus (GET /metrics) — stage latencies, quality scores, cache, errors
+**Dashboard:** Grafana at http://localhost:3001 (admin/admin) — pre-provisioned RAG dashboard
+**Log-trace correlation:** trace_id injected into every structlog message
+
+**New files:** backend/app/telemetry.py, monitoring/prometheus.yml, monitoring/grafana/provisioning/...
+**Docker services added:** rag_prometheus (9090), rag_grafana (3001)
+
+

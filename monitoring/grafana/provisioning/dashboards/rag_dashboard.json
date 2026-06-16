@@ -1,18 +1,32 @@
 {
   "uid": "rag-backend-overview",
   "title": "RAG Backend Overview",
-  "tags": ["rag", "backend"],
+  "tags": [
+    "rag",
+    "backend"
+  ],
   "timezone": "browser",
   "refresh": "30s",
-  "time": { "from": "now-1h", "to": "now" },
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
   "schemaVersion": 38,
   "panels": [
     {
       "id": 1,
       "type": "timeseries",
       "title": "Request Rate (req/s by endpoint)",
-      "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "targets": [
         {
           "expr": "sum by (endpoint) (rate(rag_request_duration_seconds_count[5m]))",
@@ -20,15 +34,28 @@
         }
       ],
       "fieldConfig": {
-        "defaults": { "unit": "reqps", "custom": { "lineWidth": 2 } }
+        "defaults": {
+          "unit": "reqps",
+          "custom": {
+            "lineWidth": 2
+          }
+        }
       }
     },
     {
       "id": 2,
       "type": "timeseries",
       "title": "P95 Request Latency by Endpoint",
-      "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "targets": [
         {
           "expr": "histogram_quantile(0.95, sum by (endpoint, le) (rate(rag_request_duration_seconds_bucket[5m])))",
@@ -36,15 +63,28 @@
         }
       ],
       "fieldConfig": {
-        "defaults": { "unit": "s", "custom": { "lineWidth": 2 } }
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "lineWidth": 2
+          }
+        }
       }
     },
     {
       "id": 3,
       "type": "timeseries",
       "title": "Pipeline Stage Avg Latency",
-      "gridPos": { "x": 0, "y": 8, "w": 12, "h": 8 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": {
+        "x": 0,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "targets": [
         {
           "expr": "rate(rag_pipeline_stage_seconds_sum[5m]) / rate(rag_pipeline_stage_seconds_count[5m])",
@@ -52,15 +92,28 @@
         }
       ],
       "fieldConfig": {
-        "defaults": { "unit": "s", "custom": { "lineWidth": 2 } }
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "lineWidth": 2
+          }
+        }
       }
     },
     {
       "id": 4,
       "type": "timeseries",
       "title": "Faithfulness Score",
-      "gridPos": { "x": 12, "y": 8, "w": 12, "h": 8 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": {
+        "x": 12,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "targets": [
         {
           "expr": "rag_faithfulness_score",
@@ -75,12 +128,23 @@
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              { "color": "red", "value": null },
-              { "color": "yellow", "value": 0.5 },
-              { "color": "green", "value": 0.7 }
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.5
+              },
+              {
+                "color": "green",
+                "value": 0.7
+              }
             ]
           },
-          "custom": { "lineWidth": 2 }
+          "custom": {
+            "lineWidth": 2
+          }
         }
       }
     },
@@ -88,8 +152,16 @@
       "id": 5,
       "type": "timeseries",
       "title": "Hallucination Rate",
-      "gridPos": { "x": 0, "y": 16, "w": 12, "h": 8 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": {
+        "x": 0,
+        "y": 16,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "targets": [
         {
           "expr": "rag_hallucination_rate",
@@ -104,12 +176,23 @@
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              { "color": "green", "value": null },
-              { "color": "yellow", "value": 0.2 },
-              { "color": "red", "value": 0.4 }
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.2
+              },
+              {
+                "color": "red",
+                "value": 0.4
+              }
             ]
           },
-          "custom": { "lineWidth": 2 }
+          "custom": {
+            "lineWidth": 2
+          }
         }
       }
     },
@@ -117,8 +200,16 @@
       "id": 6,
       "type": "stat",
       "title": "Cache Hit Rate",
-      "gridPos": { "x": 12, "y": 16, "w": 6, "h": 8 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": {
+        "x": 12,
+        "y": 16,
+        "w": 6,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "targets": [
         {
           "expr": "rate(rag_cache_hits_total[5m]) / (rate(rag_cache_hits_total[5m]) + rate(rag_cache_misses_total[5m]))",
@@ -131,36 +222,84 @@
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              { "color": "red", "value": null },
-              { "color": "yellow", "value": 0.3 },
-              { "color": "green", "value": 0.6 }
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.3
+              },
+              {
+                "color": "green",
+                "value": 0.6
+              }
             ]
           }
         }
       },
-      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" }
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "background"
+      }
     },
     {
       "id": 7,
       "type": "stat",
       "title": "Documents & Chunks",
-      "gridPos": { "x": 18, "y": 16, "w": 6, "h": 8 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": {
+        "x": 18,
+        "y": 16,
+        "w": 6,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "targets": [
-        { "expr": "rag_documents_total", "legendFormat": "Documents" },
-        { "expr": "rag_chunks_total", "legendFormat": "Chunks" }
+        {
+          "expr": "rag_documents_total",
+          "legendFormat": "Documents"
+        },
+        {
+          "expr": "rag_chunks_total",
+          "legendFormat": "Chunks"
+        }
       ],
       "fieldConfig": {
-        "defaults": { "unit": "short" }
+        "defaults": {
+          "unit": "short"
+        }
       },
-      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none" }
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "value",
+        "graphMode": "none"
+      }
     },
     {
       "id": 8,
       "type": "timeseries",
       "title": "Error Rate by Type",
-      "gridPos": { "x": 0, "y": 24, "w": 24, "h": 8 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": {
+        "x": 0,
+        "y": 24,
+        "w": 24,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "targets": [
         {
           "expr": "sum by (error_type) (rate(rag_errors_total[5m]))",
@@ -168,7 +307,12 @@
         }
       ],
       "fieldConfig": {
-        "defaults": { "unit": "ops", "custom": { "lineWidth": 2 } }
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "lineWidth": 2
+          }
+        }
       }
     }
   ]
