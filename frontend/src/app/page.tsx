@@ -26,6 +26,7 @@ export default function Home() {
   const [isAsking, setIsAsking] = useState(false);
   const [healthy, setHealthy] = useState<boolean | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sessionId, setSessionId] = useState<string | null>(null);
 
   const activeDoc = documents.find((d) => d.doc_id === activeDocId) ?? null;
 
@@ -45,6 +46,7 @@ export default function Home() {
     setActiveDocId(docId);
     setIsGlobal(false);
     setMessages([]);
+    setSessionId(null);
     setSidebarOpen(false);
   }
 
@@ -53,6 +55,7 @@ export default function Home() {
     setActiveDocId(null);
     setIsGlobal(true);
     setMessages([]);
+    setSessionId(null);
     setSidebarOpen(false);
   }
 
@@ -65,6 +68,7 @@ export default function Home() {
         setActiveDocId(null);
         setIsGlobal(false);
         setMessages([]);
+        setSessionId(null);
       }
       toast.success("Document deleted");
     } catch (err) {
@@ -81,6 +85,7 @@ export default function Home() {
     setActiveDocId(doc.doc_id);
     setIsGlobal(false);
     setMessages([]);
+    setSessionId(null);
     toast.success(`"${doc.filename}" ingested successfully`);
   }
 
@@ -143,7 +148,7 @@ export default function Home() {
       } else if (activeDocId) {
         let accumulated = "";
         askQuestionStream(
-          { question: text, document_id: activeDocId },
+          { question: text, document_id: activeDocId, session_id: sessionId ?? undefined },
           (chunk) => {
             accumulated += chunk;
             setMessages((prev) =>
@@ -157,7 +162,10 @@ export default function Home() {
               prev.map((m) => (m.id === loadingId ? { ...m, sources } : m))
             );
           },
-          () => setIsAsking(false),
+          (newSessionId?: string) => {
+            if (newSessionId) setSessionId(newSessionId);
+            setIsAsking(false);
+          },
           (err) => {
             setMessages((prev) => prev.filter((m) => m.id !== loadingId));
             toast.error(err.message);
@@ -166,7 +174,7 @@ export default function Home() {
         );
       }
     },
-    [activeDocId, isGlobal, isAsking]
+    [activeDocId, isGlobal, isAsking, sessionId]
   );
 
   const chatDisabled = !activeDocId && !isGlobal;

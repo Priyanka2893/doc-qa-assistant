@@ -91,6 +91,9 @@ async def ask_question(request: Request, body: AskRequest) -> AskResponse:
     # Step 1: embed question upfront (reused for cache lookup and semantic correction matching)
     question_embedding = await async_encode_query(settings.EMBEDDING_MODEL, body.question)
 
+    # Auto-create session if not provided — session_id flows back to client in response
+    session_id = body.session_id or session_memory.create_session(body.document_id)
+
     # Step 2: check expert corrections first
     from app.services.embedder import get_embedder
     embedder = get_embedder(settings.EMBEDDING_MODEL)
@@ -108,7 +111,7 @@ async def ask_question(request: Request, body: AskRequest) -> AskResponse:
             doc_id=body.document_id,
             cache_hit=False,
             cache_hit_type=None,
-            session_id=body.session_id,
+            session_id=session_id,
             is_correction=True,
         )
 
@@ -119,16 +122,15 @@ async def ask_question(request: Request, body: AskRequest) -> AskResponse:
             update={
                 "cache_hit": True,
                 "cache_hit_type": hit_type,
-                "session_id": body.session_id,
+                "session_id": session_id,
             }
         )
 
     # Step 4: inject session context into question for retrieval + LLM
     enriched_question = body.question
-    if body.session_id:
-        context_prefix = session_memory.get_context_for_query(body.session_id)
-        if context_prefix:
-            enriched_question = context_prefix + "\n\n" + body.question
+    context_prefix = session_memory.get_context_for_query(session_id)
+    if context_prefix:
+        enriched_question = context_prefix + "\n\n" + body.question
 
     output = await retrieve(
         question=enriched_question,
@@ -263,7 +265,7 @@ async def ask_question(request: Request, body: AskRequest) -> AskResponse:
         doc_id=body.document_id,
         cache_hit=False,
         cache_hit_type=None,
-        session_id=body.session_id,
+        session_id=session_id,
         is_correction=False,
         evidence_quality=evidence_quality,
         avg_confidence=_avg_confidence(results),
@@ -279,14 +281,13 @@ async def ask_question(request: Request, body: AskRequest) -> AskResponse:
     await cache.set(body.document_id, body.question, question_embedding, response)
 
     # Step 7: update session turn
-    if body.session_id:
-        session_memory.add_turn(
-            session_id=body.session_id,
-            question=body.question,
-            answer=llm_result["answer"],
-            doc_id=body.document_id,
-            cited_sources=cited_sources,
-        )
+    session_memory.add_turn(
+        session_id=session_id,
+        question=body.question,
+        answer=llm_result["answer"],
+        doc_id=body.document_id,
+        cited_sources=cited_sources,
+    )
 
     logger.info(
         "qa.answered",
@@ -322,12 +323,12 @@ async def ask_question_stream(request: Request, body: AskRequest) -> StreamingRe
     if not doc:
         raise HTTPException(status_code=404, detail=f"Document '{body.document_id}' not found.")
 
+    session_memory = get_session_memory()
+    session_id = body.session_id or session_memory.create_session(body.document_id)
     enriched_question = body.question
-    if body.session_id:
-        session_memory = get_session_memory()
-        context_prefix = session_memory.get_context_for_query(body.session_id)
-        if context_prefix:
-            enriched_question = context_prefix + "\n\n" + body.question
+    context_prefix = session_memory.get_context_for_query(session_id)
+    if context_prefix:
+        enriched_question = context_prefix + "\n\n" + body.question
 
     output = await retrieve(
         question=enriched_question,
@@ -347,6 +348,7 @@ async def ask_question_stream(request: Request, body: AskRequest) -> StreamingRe
     doc_id = body.document_id
 
     async def event_generator():
+        accumulated = ""
         yield f"data: {json.dumps({'type': 'start', 'doc_id': doc_id, 'request_id': req_id})}\n\n"
         try:
             async for text_chunk in generate_answer_stream(
@@ -355,11 +357,19 @@ async def ask_question_stream(request: Request, body: AskRequest) -> StreamingRe
                 api_key=settings.GROQ_API_KEY,
                 temperature=body.temperature,
             ):
+                accumulated += text_chunk
                 yield f"data: {json.dumps({'type': 'chunk', 'text': text_chunk})}\n\n"
         except Exception as exc:
             yield f"data: {json.dumps({'type': 'error', 'detail': str(exc)})}\n\n"
             return
-        yield f"data: {json.dumps({'type': 'done', 'tokens_used': 0})}\n\n"
+        session_memory.add_turn(
+            session_id=session_id,
+            question=body.question,
+            answer=accumulated,
+            doc_id=body.document_id,
+            cited_sources=[],
+        )
+        yield f"data: {json.dumps({'type': 'done', 'tokens_used': 0, 'session_id': session_id})}\n\n"
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 

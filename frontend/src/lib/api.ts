@@ -34,6 +34,7 @@ export interface AskRequest {
   question: string;
   document_id: string;
   top_k?: number;
+  session_id?: string;
 }
 
 export interface AskResponse {
@@ -43,6 +44,7 @@ export interface AskResponse {
   tokens_used: number;
   doc_id: string;
   cache_hit: boolean;
+  session_id?: string;
 }
 
 export interface GlobalAskRequest {
@@ -191,7 +193,7 @@ export function askQuestionStream(
   request: AskRequest,
   onChunk: (text: string) => void,
   onSources: (sources: ChunkSource[]) => void,
-  onDone: () => void,
+  onDone: (sessionId?: string) => void,
   onError?: (error: Error) => void
 ): () => void {
   const controller = new AbortController();
@@ -233,6 +235,7 @@ export function askQuestionStream(
               text?: string;
               sources?: ChunkSource[];
               tokens_used?: number;
+              session_id?: string;
               detail?: string;
             };
             if (event.type === "chunk" && event.text) {
@@ -240,7 +243,7 @@ export function askQuestionStream(
             } else if (event.type === "sources" && event.sources) {
               onSources(event.sources);
             } else if (event.type === "done") {
-              onDone();
+              onDone(event.session_id);
             } else if (event.type === "error") {
               throw new Error(event.detail ?? "Stream error");
             }
