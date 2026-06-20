@@ -200,8 +200,15 @@ services:
       AIRFLOW__WEBSERVER__EXPOSE_CONFIG: 'true'
       # MinIO connection
       AIRFLOW_CONN_AWS_DEFAULT: 'aws://minioadmin:minioadmin123@?endpoint_url=http%3A%2F%2Fminio%3A9000&region_name=us-east-1'
-      # Kafka connection  
+      # Kafka connection
       AIRFLOW_CONN_KAFKA_DEFAULT: 'kafka://?bootstrap_servers=redpanda%3A9092'
+      # Plugin env vars
+      KAFKA_BOOTSTRAP_SERVERS_INTERNAL: redpanda:9092
+      KAFKA_TOPIC_INGEST: rag.documents.ingest
+      MINIO_ENDPOINT_INTERNAL: http://minio:9000
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin123
+      S3_BUCKET_NAME: rag-docs
     volumes:
       - ./airflow/dags:/opt/airflow/dags
       - ./airflow/plugins:/opt/airflow/plugins
@@ -227,6 +234,13 @@ services:
       AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
       AIRFLOW_CONN_AWS_DEFAULT: 'aws://minioadmin:minioadmin123@?endpoint_url=http%3A%2F%2Fminio%3A9000&region_name=us-east-1'
       AIRFLOW_CONN_KAFKA_DEFAULT: 'kafka://?bootstrap_servers=redpanda%3A9092'
+      # Plugin env vars
+      KAFKA_BOOTSTRAP_SERVERS_INTERNAL: redpanda:9092
+      KAFKA_TOPIC_INGEST: rag.documents.ingest
+      MINIO_ENDPOINT_INTERNAL: http://minio:9000
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin123
+      S3_BUCKET_NAME: rag-docs
     volumes:
       - ./airflow/dags:/opt/airflow/dags
       - ./airflow/plugins:/opt/airflow/plugins

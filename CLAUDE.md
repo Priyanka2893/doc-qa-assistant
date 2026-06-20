@@ -307,3 +307,20 @@ Infrastructure added: MinIO + Redpanda + Airflow.
 **New env vars:** MINIO_*, S3_BUCKET_NAME, KAFKA_*, S3_*_PREFIX
 **New directory:** airflow/ (dags/, plugins/, logs/)
 **Next:** K2 — Airflow DAG + Kafka producer
+
+### Kafka Integration K2 — COMPLETE ✅
+Airflow DAG and Kafka producer implemented.
+
+**DAG:** s3_to_kafka_dag (schedule: every 5 min, max_active_runs=1)
+**Flow:** list upload/ → per-file: build message → publish to Kafka → move to done/ (or reject/)
+**Partition key:** company name (all docs from same company → same partition)
+**Producer config:** enable.idempotence=True, acks=all, retries=5
+**Filename convention:** name.ext__Company__Category__timestamp.ext
+
+**New files:**
+- airflow/dags/s3_to_kafka_dag.py — main DAG
+- airflow/plugins/rag_ingestion/schemas.py — KafkaDocumentMessage Pydantic model
+- airflow/plugins/rag_ingestion/producer.py — idempotent Kafka producer
+- airflow/plugins/rag_ingestion/s3_utils.py — MinIO operations
+
+**Next:** K3 — Kafka consumer integrating with existing RAG pipeline
