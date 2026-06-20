@@ -1,0 +1,8 @@
+kafka:
+  brokers: ["redpanda:9092"]
+  clientId: "redpanda-console"
+
+redpanda:
+  adminApi:
+    enabled: true
+    urls: ["http://redpanda:9644"]

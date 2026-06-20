@@ -288,4 +288,22 @@ Semantic cache and session memory implemented.
 **AskRequest new field:** session_id
 **AskResponse new fields:** cache_hit, cache_hit_type, session_id, is_correction
 
-### 🎉 ALL FEATURES COMPLETE — Production-Grade RAG System
+### Kafka Integration K1 — COMPLETE ✅
+Infrastructure added: MinIO + Redpanda + Airflow.
+
+**New Docker services:**
+- rag_minio (port 9000/9001) — local S3, bucket "rag-docs" with upload/done/reject/ prefixes
+- rag_redpanda (port 19092) — Kafka-compatible broker (ARM64, low RAM)
+- rag_redpanda_console (port 8080) — Kafka topic browser
+- rag_airflow_webserver (port 8082) — DAG management (admin/admin)
+- rag_airflow_scheduler — DAG runner
+- rag_airflow_db — Postgres backing Airflow
+
+**Kafka topics:**
+- rag.documents.ingest (3 partitions) — main ingestion events
+- rag.documents.deadletter (1 partition) — failed messages
+- rag.documents.status (1 partition) — processing status events
+
+**New env vars:** MINIO_*, S3_BUCKET_NAME, KAFKA_*, S3_*_PREFIX
+**New directory:** airflow/ (dags/, plugins/, logs/)
+**Next:** K2 — Airflow DAG + Kafka producer

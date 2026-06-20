@@ -46,8 +46,198 @@ services:
     depends_on:
       - prometheus
 
+  # ─── MinIO (local S3) ───────────────────────────────────────────────
+  minio:
+    image: minio/minio:latest
+    container_name: rag_minio
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"   # S3 API
+      - "9001:9001"   # Web Console
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin123
+    volumes:
+      - minio_data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # MinIO bucket init (runs once, creates bucket + prefixes)
+  minio_init:
+    image: minio/mc:latest
+    container_name: rag_minio_init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 minioadmin minioadmin123 &&
+      mc mb --ignore-existing local/rag-docs &&
+      mc mb --ignore-existing local/rag-docs-done &&
+      echo 'upload placeholder' | mc pipe local/rag-docs/upload/.keep &&
+      echo 'done placeholder'   | mc pipe local/rag-docs/done/.keep &&
+      echo 'reject placeholder' | mc pipe local/rag-docs/reject/.keep &&
+      echo 'Buckets and prefixes created'
+      "
+    restart: "no"
+
+  # ─── Redpanda (Kafka-compatible, ARM64-native) ───────────────────────
+  redpanda:
+    image: redpandadata/redpanda:v24.1.7
+    container_name: rag_redpanda
+    command:
+      - redpanda
+      - start
+      - --smp 1
+      - --memory 400M
+      - --overprovisioned
+      - --kafka-addr internal://0.0.0.0:9092,external://0.0.0.0:19092
+      - --advertise-kafka-addr internal://redpanda:9092,external://localhost:19092
+      - --pandaproxy-addr internal://0.0.0.0:8082,external://0.0.0.0:18082
+      - --advertise-pandaproxy-addr internal://redpanda:8082,external://localhost:18082
+      - --schema-registry-addr internal://0.0.0.0:8081,external://0.0.0.0:18081
+      - --rpc-addr redpanda:33145
+      - --advertise-rpc-addr redpanda:33145
+    ports:
+      - "19092:19092"  # External Kafka API (for local clients)
+      - "18082:18082"  # Pandaproxy
+      - "18081:18081"  # Schema registry
+      - "9644:9644"    # Admin API
+    volumes:
+      - redpanda_data:/var/lib/redpanda/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health | grep -E 'Healthy:.+true'"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+
+  # Redpanda Console (Kafka UI)
+  redpanda_console:
+    image: redpandadata/console:v2.6.0
+    container_name: rag_redpanda_console
+    depends_on:
+      - redpanda
+    ports:
+      - "8080:8080"
+    environment:
+      CONFIG_FILEPATH: /etc/console/config.yaml
+    volumes:
+      - ./monitoring/redpanda-console-config.yaml:/etc/console/config.yaml:ro
+    restart: unless-stopped
+
+  # Topic init (creates Kafka topics)
+  redpanda_init:
+    image: redpandadata/redpanda:v24.1.7
+    container_name: rag_redpanda_init
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      rpk topic create rag.documents.ingest --partitions 3 --replicas 1 --brokers redpanda:9092 &&
+      rpk topic create rag.documents.deadletter --partitions 1 --replicas 1 --brokers redpanda:9092 &&
+      rpk topic create rag.documents.status --partitions 1 --replicas 1 --brokers redpanda:9092 &&
+      echo 'Topics created successfully'
+      "
+    restart: "no"
+
+  # ─── Airflow 2.8 (LocalExecutor) ────────────────────────────────────
+  airflow_db:
+    image: postgres:16-alpine
+    container_name: rag_airflow_db
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - airflow_db_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 10s
+      retries: 5
+
+  airflow_init:
+    image: apache/airflow:2.9.3-python3.12
+    container_name: rag_airflow_init
+    depends_on:
+      airflow_db:
+        condition: service_healthy
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow_db/airflow
+      AIRFLOW__CORE__FERNET_KEY: ''
+      AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+    entrypoint: >
+      /bin/bash -c "
+      airflow db migrate &&
+      airflow users create --username admin --password admin --firstname Admin --lastname User --role Admin --email admin@example.com &&
+      echo 'Airflow initialized'
+      "
+    restart: "no"
+
+  airflow_webserver:
+    image: apache/airflow:2.9.3-python3.12
+    container_name: rag_airflow_webserver
+    depends_on:
+      airflow_init:
+        condition: service_completed_successfully
+      airflow_db:
+        condition: service_healthy
+    ports:
+      - "8082:8080"
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow_db/airflow
+      AIRFLOW__CORE__FERNET_KEY: ''
+      AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+      AIRFLOW__WEBSERVER__SECRET_KEY: 'your-secret-key-change-in-prod'
+      AIRFLOW__WEBSERVER__EXPOSE_CONFIG: 'true'
+      # MinIO connection
+      AIRFLOW_CONN_AWS_DEFAULT: 'aws://minioadmin:minioadmin123@?endpoint_url=http%3A%2F%2Fminio%3A9000&region_name=us-east-1'
+      # Kafka connection  
+      AIRFLOW_CONN_KAFKA_DEFAULT: 'kafka://?bootstrap_servers=redpanda%3A9092'
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/plugins:/opt/airflow/plugins
+      - ./airflow/logs:/opt/airflow/logs
+    command: webserver
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  airflow_scheduler:
+    image: apache/airflow:2.9.3-python3.12
+    container_name: rag_airflow_scheduler
+    depends_on:
+      airflow_init:
+        condition: service_completed_successfully
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow_db/airflow
+      AIRFLOW__CORE__FERNET_KEY: ''
+      AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+      AIRFLOW_CONN_AWS_DEFAULT: 'aws://minioadmin:minioadmin123@?endpoint_url=http%3A%2F%2Fminio%3A9000&region_name=us-east-1'
+      AIRFLOW_CONN_KAFKA_DEFAULT: 'kafka://?bootstrap_servers=redpanda%3A9092'
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/plugins:/opt/airflow/plugins
+      - ./airflow/logs:/opt/airflow/logs
+    command: scheduler
+    restart: unless-stopped
+
 volumes:
   qdrant_data:
-    driver: local
   prometheus_data:
   grafana_data:
+  minio_data:
+  redpanda_data:
+  airflow_db_data:

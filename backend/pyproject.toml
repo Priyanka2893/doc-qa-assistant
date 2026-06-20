@@ -35,6 +35,7 @@ dependencies = [
     "opentelemetry-instrumentation-fastapi>=0.63b1",
     "opentelemetry-exporter-otlp-proto-grpc>=1.42.1",
     "prometheus-client>=0.25.0",
+    "boto3>=1.43.34",
 ]
 
 [tool.pytest.ini_options]
