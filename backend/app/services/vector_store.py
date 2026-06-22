@@ -62,6 +62,7 @@ async def upsert_chunks(
     language: str | None = None,
     doc_title: str | None = None,
     author: str | None = None,
+    extra_payload: dict | None = None,
 ) -> list[str]:
     """Upsert chunk embeddings with enriched metadata payload into Qdrant.
 
@@ -73,23 +74,26 @@ async def upsert_chunks(
         char_start = char_offset
         char_end = char_offset + len(chunk)
         char_offset = char_end
+        payload: dict = {
+            "text": chunk,
+            "doc_id": doc_id,
+            "filename": filename,
+            "chunk_index": i,
+            "page_number": page_numbers[i] if page_numbers else None,
+            "language": language,
+            "doc_title": doc_title,
+            "author": author,
+            "char_start": char_start,
+            "char_end": char_end,
+            "word_count": len(chunk.split()),
+        }
+        if extra_payload:
+            payload.update(extra_payload)
         points.append(
             qdrant_models.PointStruct(
                 id=str(uuid.uuid4()),
                 vector=embeddings[i],
-                payload={
-                    "text": chunk,
-                    "doc_id": doc_id,
-                    "filename": filename,
-                    "chunk_index": i,
-                    "page_number": page_numbers[i] if page_numbers else None,
-                    "language": language,
-                    "doc_title": doc_title,
-                    "author": author,
-                    "char_start": char_start,
-                    "char_end": char_end,
-                    "word_count": len(chunk.split()),
-                },
+                payload=payload,
             )
         )
     await client.upsert(collection_name=collection_name, points=points)

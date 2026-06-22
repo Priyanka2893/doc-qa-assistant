@@ -90,6 +90,9 @@ _MIGRATIONS = [
     "ALTER TABLE documents ADD COLUMN exact_dedup_removed INTEGER DEFAULT 0",
     "ALTER TABLE documents ADD COLUMN semantic_dedup_removed INTEGER DEFAULT 0",
     "ALTER TABLE documents ADD COLUMN document_trust TEXT DEFAULT 'unknown'",
+    "ALTER TABLE documents ADD COLUMN company TEXT",
+    "ALTER TABLE documents ADD COLUMN category TEXT",
+    "ALTER TABLE documents ADD COLUMN ingestion_source TEXT DEFAULT 'api'",
 ]
 
 
@@ -140,6 +143,44 @@ async def insert_document(
         await db.commit()
 
 
+async def insert_document_kafka(
+    doc_id: str,
+    filename: str,
+    file_size_bytes: int,
+    page_count: int,
+    chunk_count: int,
+    content_hash: str,
+    author: str | None = None,
+    doc_title: str | None = None,
+    language: str = "en",
+    word_count: int = 0,
+    file_format: str = "",
+    exact_dedup_removed: int = 0,
+    semantic_dedup_removed: int = 0,
+    company: str | None = None,
+    category: str | None = None,
+) -> None:
+    """Insert a fully-processed document record from the Kafka consumer."""
+    async with get_db() as db:
+        await db.execute(
+            """
+            INSERT INTO documents
+                (doc_id, filename, file_size_bytes, page_count, chunk_count,
+                 content_hash, status, author, doc_title, language, word_count,
+                 file_format, exact_dedup_removed, semantic_dedup_removed,
+                 company, category, ingestion_source)
+            VALUES (?, ?, ?, ?, ?, ?, 'ready', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'kafka')
+            """,
+            (
+                doc_id, filename, file_size_bytes, page_count, chunk_count,
+                content_hash, author, doc_title, language, word_count,
+                file_format, exact_dedup_removed, semantic_dedup_removed,
+                company, category,
+            ),
+        )
+        await db.commit()
+
+
 async def update_document_ingested(
     doc_id: str,
     chunk_count: int,
@@ -185,7 +226,8 @@ async def update_document_status(doc_id: str, status: str) -> None:
 _SELECT_COLS = """
     doc_id, filename, chunk_count, page_count, file_size_bytes, uploaded_at, status,
     content_hash, author, doc_title, language, word_count, file_format,
-    exact_dedup_removed, semantic_dedup_removed, document_trust
+    exact_dedup_removed, semantic_dedup_removed, document_trust,
+    company, category, ingestion_source
 """
 
 

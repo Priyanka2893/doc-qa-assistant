@@ -324,3 +324,26 @@ Airflow DAG and Kafka producer implemented.
 - airflow/plugins/rag_ingestion/s3_utils.py — MinIO operations
 
 **Next:** K3 — Kafka consumer integrating with existing RAG pipeline
+
+### Kafka Integration K3 — COMPLETE ✅
+Kafka consumer integrated with existing RAG pipeline.
+
+**Consumer:** worker/consumer.py — polls rag.documents.ingest, at-least-once delivery
+**Offset commit:** Manual, ONLY after successful indexing
+**Dedup:** content_hash check against SQLite before processing
+**Retry:** 3 attempts with exponential backoff (2s, 4s, 8s)
+**DLQ:** Failed messages after MAX_RETRIES → rag.documents.deadletter topic
+**Status events:** rag.documents.status topic (processing|completed|duplicate|failed)
+
+**New files:**
+- worker/consumer.py — main consumer loop
+- worker/ingestion_handler.py — bridges Kafka → existing app.services.*
+- worker/s3_client.py — MinIO download
+- worker/schemas.py — KafkaDocumentMessage model
+- worker/status_publisher.py — status events
+
+**DB additions:** company, category, ingestion_source columns in SQLite documents table
+**vector_store.upsert_chunks:** now accepts optional extra_payload dict
+
+**Run:** cd backend && uv run python -m worker.consumer
+**Next:** K4 — Kafka metrics in Prometheus/Grafana

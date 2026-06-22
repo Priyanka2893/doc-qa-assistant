@@ -1,0 +1,20 @@
+[2026-06-22T06:30:30.049+0000] {local_task_job_runner.py:120} INFO - ::group::Pre task execution logs
+[2026-06-22T06:30:30.071+0000] {taskinstance.py:2076} INFO - Dependencies all met for dep_context=non-requeueable deps ti=<TaskInstance: s3_to_kafka_dag.list_new_files scheduled__2026-06-22T06:25:00+00:00 [queued]>
+[2026-06-22T06:30:30.075+0000] {taskinstance.py:2076} INFO - Dependencies all met for dep_context=requeueable deps ti=<TaskInstance: s3_to_kafka_dag.list_new_files scheduled__2026-06-22T06:25:00+00:00 [queued]>
+[2026-06-22T06:30:30.075+0000] {taskinstance.py:2306} INFO - Starting attempt 1 of 4
+[2026-06-22T06:30:30.080+0000] {taskinstance.py:2330} INFO - Executing <Task(_PythonDecoratedOperator): list_new_files> on 2026-06-22 06:25:00+00:00
+[2026-06-22T06:30:30.085+0000] {standard_task_runner.py:90} INFO - Running: ['***', 'tasks', 'run', 's3_to_kafka_dag', 'list_new_files', 'scheduled__2026-06-22T06:25:00+00:00', '--job-id', '21', '--raw', '--subdir', 'DAGS_FOLDER/s3_to_kafka_dag.py', '--cfg-path', '/tmp/tmp0rfqtbdm']
+[2026-06-22T06:30:30.088+0000] {standard_task_runner.py:91} INFO - Job 21: Subtask list_new_files
+[2026-06-22T06:30:30.087+0000] {logging_mixin.py:188} WARNING - /home/***/.local/lib/python3.12/site-packages/***/task/task_runner/standard_task_runner.py:62 DeprecationWarning: This process (pid=5502) is multi-threaded, use of fork() may lead to deadlocks in the child.
+[2026-06-22T06:30:30.089+0000] {standard_task_runner.py:64} INFO - Started process 5503 to run task
+[2026-06-22T06:30:30.134+0000] {task_command.py:426} INFO - Running <TaskInstance: s3_to_kafka_dag.list_new_files scheduled__2026-06-22T06:25:00+00:00 [running]> on host 6a16ba6b28f7
+[2026-06-22T06:30:30.203+0000] {taskinstance.py:2648} INFO - Exporting env vars: AIRFLOW_CTX_DAG_OWNER='rag-team' AIRFLOW_CTX_DAG_ID='s3_to_kafka_dag' AIRFLOW_CTX_TASK_ID='list_new_files' AIRFLOW_CTX_EXECUTION_DATE='2026-06-22T06:25:00+00:00' AIRFLOW_CTX_TRY_NUMBER='1' AIRFLOW_CTX_DAG_RUN_ID='scheduled__2026-06-22T06:25:00+00:00'
+[2026-06-22T06:30:30.204+0000] {taskinstance.py:430} INFO - ::endgroup::
+[2026-06-22T06:30:30.302+0000] {logging_mixin.py:188} INFO - 2026-06-22 06:30:30 [info     ] files_discovered               count=0 dag_run_id=scheduled__2026-06-22T06:25:00+00:00
+[2026-06-22T06:30:30.303+0000] {python.py:237} INFO - Done. Returned value was: []
+[2026-06-22T06:30:30.303+0000] {taskinstance.py:441} INFO - ::group::Post task execution logs
+[2026-06-22T06:30:30.323+0000] {taskinstance.py:1206} INFO - Marking task as SUCCESS. dag_id=s3_to_kafka_dag, task_id=list_new_files, run_id=scheduled__2026-06-22T06:25:00+00:00, execution_date=20260622T062500, start_date=20260622T063030, end_date=20260622T063030
+[2026-06-22T06:30:30.358+0000] {local_task_job_runner.py:243} INFO - Task exited with return code 0
+[2026-06-22T06:30:30.381+0000] {abstractoperator.py:588} INFO - Marking <TaskInstance: s3_to_kafka_dag.process_file scheduled__2026-06-22T06:25:00+00:00 [None]> as SKIPPED since the map has 0 values to expand
+[2026-06-22T06:30:30.386+0000] {taskinstance.py:3503} INFO - 0 downstream tasks scheduled from follow-on schedule check
+[2026-06-22T06:30:30.387+0000] {local_task_job_runner.py:222} INFO - ::endgroup::

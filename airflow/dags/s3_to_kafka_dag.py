@@ -77,17 +77,21 @@ def s3_to_kafka_dag():
             )
 
         try:
+            filename = s3_key.split("/")[-1]
+            done_key = f"done/{filename}"
+
+            # Move first so the consumer always downloads from done/
+            move_s3_object(s3, S3_BUCKET, s3_key, done_key)
+
             msg = KafkaDocumentMessage.from_s3_object(s3_obj_normalised, context["run_id"])
             msg.s3_bucket = S3_BUCKET
+            msg.s3_key = done_key  # consumer downloads from done/
 
             producer = get_producer(KAFKA_SERVERS)
             publish_message(producer, KAFKA_TOPIC, msg.model_dump(), partition_key=msg.company)
 
-            filename = s3_key.split("/")[-1]
-            move_s3_object(s3, S3_BUCKET, s3_key, f"done/{filename}")
-
-            log.info("file_processed_success", doc_id=msg.doc_id, s3_key=s3_key)
-            return {"doc_id": msg.doc_id, "status": "published", "s3_key": s3_key}
+            log.info("file_processed_success", doc_id=msg.doc_id, s3_key=done_key)
+            return {"doc_id": msg.doc_id, "status": "published", "s3_key": done_key}
 
         except Exception as e:
             log.error("file_processing_failed", s3_key=s3_key, error=str(e))
