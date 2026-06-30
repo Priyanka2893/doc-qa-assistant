@@ -371,3 +371,20 @@ Tool registry built in agentic/ folder.
 - agentic/app/tools/web_search.py — Tavily API
 - agentic/app/tools/registry.py — TOOL_MAP, get_tool_descriptions()
 **Next:** agentic/phases/a2-langgraph-core.md
+
+### Agentic A2 — COMPLETE ✅
+LangGraph graph built in agentic/ folder.
+
+**Graph:** pre_classify → plan → execute → generate
+**Nodes:** pre_classifier (regex), planner (Groq JSON), executor (tools+dedup), generator ([Source N] citations)
+**API:** POST /api/v1/query on port 8010
+
+**New files:**
+- agentic/app/graph_state.py — AgentState TypedDict
+- agentic/app/graph.py — compiled LangGraph
+- agentic/app/agents/pre_classifier.py
+- agentic/app/agents/planner.py
+- agentic/app/agents/executor.py
+- agentic/app/agents/generator.py
+- agentic/app/routers/query.py
+**Next:** agentic/phases/a3-crag-streaming.md
