@@ -359,3 +359,15 @@ New folder: doc-qa-assistant/agentic/
 **New keys in .env:** TAVILY_API_KEY, LANGCHAIN_API_KEY, LANGCHAIN_PROJECT, MAX_RETRIEVAL_ITERATIONS, MAX_TOOL_CALLS_PER_TASK
 **Config:** agentic/app/config.py reads from ../../.env (parent .env)
 **Next:** a1-tool-registry.md
+
+### Agentic A1 — COMPLETE ✅
+Tool registry built in agentic/ folder.
+
+**Tools:** vector_search, filtered_vector_search (Qdrant), web_search (Tavily)
+**Services:** embedder.py (same all-MiniLM-L6-v2 as backend), groq_client.py (ChatGroq)
+**Key files:**
+- agentic/app/config.py — reads ../../.env (shared)
+- agentic/app/tools/vector_search.py — connects to Qdrant 6333
+- agentic/app/tools/web_search.py — Tavily API
+- agentic/app/tools/registry.py — TOOL_MAP, get_tool_descriptions()
+**Next:** agentic/phases/a2-langgraph-core.md
