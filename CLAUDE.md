@@ -347,3 +347,15 @@ Kafka consumer integrated with existing RAG pipeline.
 
 **Run:** cd backend && uv run python -m worker.consumer
 **Next:** K4 — Kafka metrics in Prometheus/Grafana
+
+### Agentic RAG — Bootstrap COMPLETE ✅
+New folder: doc-qa-assistant/agentic/
+
+**Isolation:** agentic/ has its own pyproject.toml + .venv — completely separate from backend/
+**Shared:** Same .env (root), same Qdrant (6333), same Prometheus/Grafana
+**Port:** Agentic API runs on 8010 (backend stays on 8000)
+**Run:** cd agentic && uv run uvicorn app.main:app --reload --port 8010
+
+**New keys in .env:** TAVILY_API_KEY, LANGCHAIN_API_KEY, LANGCHAIN_PROJECT, MAX_RETRIEVAL_ITERATIONS, MAX_TOOL_CALLS_PER_TASK
+**Config:** agentic/app/config.py reads from ../../.env (parent .env)
+**Next:** a1-tool-registry.md

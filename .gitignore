@@ -25,4 +25,14 @@ data/
 .DS_Store
 *.swp
 
+# Airflow
+airflow/logs/
+
 docs
+
+# Agentic RAG
+agentic/.venv/
+agentic/**/__pycache__/
+agentic/.ruff_cache/
+agentic/.pytest_cache/
+agentic/data/
